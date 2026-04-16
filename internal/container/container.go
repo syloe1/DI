@@ -2,15 +2,23 @@ package container
 
 import (
 	"context"
+	"log"
+
 	"go-admin/api"
+	"go-admin/config"
 	"go-admin/internal/repository"
 
 	"github.com/go-redis/redis/v8"
 	"gorm.io/gorm"
 )
 
-// Container 依赖注入容器
 type Container struct {
+	Config    *config.App
+	Logger    *log.Logger
+	DB        *gorm.DB
+	Redis     *redis.Client
+	JWTSecret []byte
+
 	UserService *api.UserService
 	PostAPI     *api.PostAPI
 	CommentAPI  *api.CommentAPI
@@ -18,14 +26,12 @@ type Container struct {
 	SocialAPI   *api.SocialAPI
 	MessageAPI  *api.MessageAPI
 	WSAPI       *api.WSAPI
-	// 其他服务可以继续添加...
 }
 
-// NewContainer 创建依赖注入容器
-func NewContainer(db *gorm.DB, redisClient *redis.Client, jwtSecret []byte) *Container {
+func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLogger *log.Logger) *Container {
 	ctx := context.Background()
+	jwtSecret := []byte(cfg.GetJwtConfig().Secret)
 
-	// 创建Repository实现
 	userDB := &repository.GormUserDB{DB: db}
 	userCache := &repository.RedisUserCache{Client: redisClient}
 	postRepo := repository.NewGormPostRepository(db)
@@ -33,26 +39,20 @@ func NewContainer(db *gorm.DB, redisClient *redis.Client, jwtSecret []byte) *Con
 	interactRepo := repository.NewGormInteractRepository(db)
 	socialRepo := repository.NewGormSocialRepository(db)
 	messageRepo := repository.NewGormMessageRepository(db)
-
-	// 创建JWT配置
 	jwtCfg := &repository.DefaultJWTConfig{Secret: jwtSecret}
 
-	// 创建服务实例
-	userService := api.NewUserService(userDB, userCache, jwtCfg, jwtSecret, ctx)
-	postAPI := api.NewPostAPI(postRepo)
-	commentAPI := api.NewCommentAPI(commentRepo)
-	interactAPI := api.NewInteractAPI(interactRepo)
-	socialAPI := api.NewSocialAPI(socialRepo)
-	messageAPI := api.NewMessageAPI(messageRepo)
-	wsAPI := api.NewWSAPI(messageRepo, jwtSecret)
-
 	return &Container{
-		UserService: userService,
-		PostAPI:     postAPI,
-		CommentAPI:  commentAPI,
-		InteractAPI: interactAPI,
-		SocialAPI:   socialAPI,
-		MessageAPI:  messageAPI,
-		WSAPI:       wsAPI,
+		Config:      cfg,
+		Logger:      appLogger,
+		DB:          db,
+		Redis:       redisClient,
+		JWTSecret:   jwtSecret,
+		UserService: api.NewUserService(userDB, userCache, jwtCfg, jwtSecret, ctx),
+		PostAPI:     api.NewPostAPI(postRepo),
+		CommentAPI:  api.NewCommentAPI(commentRepo),
+		InteractAPI: api.NewInteractAPI(interactRepo),
+		SocialAPI:   api.NewSocialAPI(socialRepo),
+		MessageAPI:  api.NewMessageAPI(messageRepo),
+		WSAPI:       api.NewWSAPI(messageRepo, jwtSecret),
 	}
 }
