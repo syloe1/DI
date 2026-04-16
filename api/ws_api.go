@@ -1,7 +1,8 @@
-package api
+﻿﻿package api
 
 import (
 	"encoding/json"
+	"go-admin/core"
 	"go-admin/internal/repository"
 	"go-admin/model"
 	"log"
@@ -15,7 +16,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Client 表示一个WebSocket客户端
 type Client struct {
 	Hub    *Hub
 	Conn   *websocket.Conn
@@ -23,16 +23,14 @@ type Client struct {
 	Send   chan []byte
 }
 
-// Hub 管理所有WebSocket连接
 type Hub struct {
 	Clients     map[uint]*Client
 	Register    chan *Client
 	Unregister  chan *Client
 	Mutex       sync.RWMutex
-	MessageRepo repository.MessageRepository // 注入的Repository接口
+	MessageRepo repository.MessageRepository
 }
 
-// NewHub 创建新的Hub实例，注入依赖
 func NewHub(messageRepo repository.MessageRepository) *Hub {
 	return &Hub{
 		Clients:     make(map[uint]*Client),
@@ -42,7 +40,6 @@ func NewHub(messageRepo repository.MessageRepository) *Hub {
 	}
 }
 
-// Run 启动Hub的消息处理循环
 func (h *Hub) Run() {
 	for {
 		select {
@@ -54,9 +51,7 @@ func (h *Hub) Run() {
 			}
 			h.Clients[client.UserID] = client
 			h.Mutex.Unlock()
-
-			log.Printf("用户 %d 已连接", client.UserID)
-
+			log.Printf("user %d connected", client.UserID)
 		case client := <-h.Unregister:
 			h.Mutex.Lock()
 			if c, ok := h.Clients[client.UserID]; ok && c == client {
@@ -64,13 +59,11 @@ func (h *Hub) Run() {
 				delete(h.Clients, client.UserID)
 			}
 			h.Mutex.Unlock()
-
-			log.Printf("用户 %d 已断开连接", client.UserID)
+			log.Printf("user %d disconnected", client.UserID)
 		}
 	}
 }
 
-// SendMessageToUser 向指定用户发送消息
 func (h *Hub) SendMessageToUser(userID uint, message []byte) {
 	h.Mutex.RLock()
 	client, ok := h.Clients[userID]
@@ -86,14 +79,12 @@ func (h *Hub) SendMessageToUser(userID uint, message []byte) {
 	}
 }
 
-// WSAPI 封装WebSocket相关的处理器，持有依赖
 type WSAPI struct {
 	hub       *Hub
 	jwtSecret []byte
 	upgrader  websocket.Upgrader
 }
 
-// NewWSAPI 构造函数：注入依赖
 func NewWSAPI(messageRepo repository.MessageRepository, jwtSecret []byte) *WSAPI {
 	hub := NewHub(messageRepo)
 	go hub.Run()
@@ -107,58 +98,47 @@ func NewWSAPI(messageRepo repository.MessageRepository, jwtSecret []byte) *WSAPI
 	}
 }
 
-// HandleWebSocket WebSocket连接处理
 func (api *WSAPI) HandleWebSocket(c *gin.Context) {
 	token := c.Query("token")
 	if token == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "缺少token"})
+		core.Fail(c, http.StatusUnauthorized, "missing token")
 		return
 	}
 
-	// 解析JWT token
 	claims := &jwt.RegisteredClaims{}
 	parsedToken, err := jwt.ParseWithClaims(token, claims, func(token *jwt.Token) (interface{}, error) {
 		return api.jwtSecret, nil
 	})
-
 	if err != nil || !parsedToken.Valid {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "token无效"})
+		core.Fail(c, http.StatusUnauthorized, "invalid token")
 		return
 	}
 
-	// 升级到WebSocket连接
 	conn, err := api.upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		log.Printf("WebSocket升级失败: %v", err)
+		log.Printf("websocket upgrade failed: %v", err)
 		return
 	}
 
-	// 从token中获取用户ID
 	userIDStr := claims.Subject
 	userIDUint, err := strconv.ParseUint(userIDStr, 10, 64)
 	if err != nil || userIDUint == 0 {
 		conn.Close()
 		return
 	}
-	userID := uint(userIDUint)
 
-	// 创建客户端
 	client := &Client{
 		Hub:    api.hub,
 		Conn:   conn,
-		UserID: userID,
+		UserID: uint(userIDUint),
 		Send:   make(chan []byte, 256),
 	}
 
-	// 注册客户端
 	api.hub.Register <- client
-
-	// 启动读写goroutine
 	go client.writePump()
 	go client.readPump()
 }
 
-// writePump 处理消息发送
 func (c *Client) writePump() {
 	defer func() {
 		c.Conn.Close()
@@ -171,7 +151,6 @@ func (c *Client) writePump() {
 				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
-
 			if err := c.Conn.WriteMessage(websocket.TextMessage, message); err != nil {
 				return
 			}
@@ -179,7 +158,6 @@ func (c *Client) writePump() {
 	}
 }
 
-// readPump 处理消息接收
 func (c *Client) readPump() {
 	defer func() {
 		c.Hub.Unregister <- c
@@ -192,7 +170,6 @@ func (c *Client) readPump() {
 			break
 		}
 
-		// 解析消息
 		var msgData struct {
 			Type    string `json:"type"`
 			ToUID   uint   `json:"to_uid"`
@@ -203,7 +180,6 @@ func (c *Client) readPump() {
 			continue
 		}
 
-		// 处理不同类型的消息
 		switch msgData.Type {
 		case "message":
 			c.handleMessage(msgData.ToUID, msgData.Content)
@@ -213,46 +189,36 @@ func (c *Client) readPump() {
 	}
 }
 
-// handleMessage 处理聊天消息
 func (c *Client) handleMessage(toUID uint, content string) {
-	// 检查对方用户是否存在
 	_, err := c.Hub.MessageRepo.FindUserByID(toUID)
 	if err != nil {
-		// 发送错误消息给发送者
 		errorMsg, _ := json.Marshal(gin.H{
 			"type":    "error",
-			"message": "对方用户不存在",
+			"message": "user not found",
 		})
 		c.Send <- errorMsg
 		return
 	}
 
-	// 创建消息记录
 	message := &model.Message{
 		FromUID: c.UserID,
 		ToUID:   toUID,
 		Content: content,
 		IsRead:  false,
 	}
-
-	// 保存到数据库
 	if err := c.Hub.MessageRepo.CreateMessage(message); err != nil {
-		log.Printf("保存消息失败: %v", err)
+		log.Printf("save message failed: %v", err)
 		return
 	}
 
-	// 构建发送给接收者的消息
 	receiverMsg, _ := json.Marshal(gin.H{
 		"type":     "message",
 		"from_uid": c.UserID,
 		"content":  content,
 		"time":     time.Now().Format(time.RFC3339),
 	})
-
-	// 发送给接收者
 	c.Hub.SendMessageToUser(toUID, receiverMsg)
 
-	// 发送确认消息给发送者
 	confirmMsg, _ := json.Marshal(gin.H{
 		"type":    "message_sent",
 		"to_uid":  toUID,
@@ -262,7 +228,6 @@ func (c *Client) handleMessage(toUID uint, content string) {
 	c.Send <- confirmMsg
 }
 
-// handlePing 处理心跳包
 func (c *Client) handlePing() {
 	pongMsg, _ := json.Marshal(gin.H{
 		"type": "pong",
@@ -271,7 +236,6 @@ func (c *Client) handlePing() {
 	c.Send <- pongMsg
 }
 
-// BroadcastMessage 广播消息给所有在线用户
 func (api *WSAPI) BroadcastMessage(message interface{}) {
 	msgBytes, err := json.Marshal(message)
 	if err != nil {
@@ -291,7 +255,6 @@ func (api *WSAPI) BroadcastMessage(message interface{}) {
 	}
 }
 
-// GetOnlineUsers 获取在线用户列表
 func (api *WSAPI) GetOnlineUsers() []uint {
 	api.hub.Mutex.RLock()
 	defer api.hub.Mutex.RUnlock()

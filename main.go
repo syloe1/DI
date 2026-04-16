@@ -4,39 +4,37 @@ import (
 	"go-admin/config"
 	"go-admin/core"
 	"go-admin/internal/container"
-	"go-admin/model"
 	"go-admin/router"
 )
 
 func main() {
-	// 初始化配置
-	config.InitGlobalConfig()
+	appLogger := core.NewLogger()
 
-	// 初始化数据库和Redis
-	db, err := core.InitMysql(config.GlobalConfig.(*config.ServerConfig))
+	cfg, err := config.Load("config/config.yaml")
 	if err != nil {
-		panic("数据库初始化失败: " + err.Error())
+		appLogger.Fatalf("load config failed: %v", err)
 	}
 
-	core.InitRedis()
-
-	// 自动迁移数据库表
-	if db != nil {
-		db.AutoMigrate(&model.User{})
-		db.AutoMigrate(&model.Post{})
-		db.AutoMigrate(&model.Comment{})
-		db.AutoMigrate(&model.Like{})
-		db.AutoMigrate(&model.Dislike{})
-		db.AutoMigrate(&model.Collect{})
-		db.AutoMigrate(&model.Share{})
-		db.AutoMigrate(&model.UserRelation{})
-		db.AutoMigrate(&model.Message{})
+	db, err := core.InitMysql(cfg.GetMysqlConfig())
+	if err != nil {
+		appLogger.Fatalf("init mysql failed: %v", err)
 	}
 
-	// 创建依赖注入容器
-	container := container.NewContainer(db, core.RDB, []byte(config.GlobalConfig.GetJwtConfig().Secret))
+	redisClient, err := core.InitRedis(cfg.GetRedisConfig())
+	if err != nil {
+		appLogger.Fatalf("init redis failed: %v", err)
+	}
+	defer redisClient.Close()
 
-	// 使用依赖注入版本的路由
-	r := router.InitDependencyInjectionRouter(container)
-	r.Run(":" + config.GlobalConfig.GetServerConfig().Port)
+	if err := core.AutoMigrate(db); err != nil {
+		appLogger.Fatalf("auto migrate failed: %v", err)
+	}
+
+	appContainer := container.NewContainer(cfg, db, redisClient, appLogger)
+	appLogger.Println("DI container initialized")
+
+	r := router.InitDependencyInjectionRouter(appContainer)
+	if err := r.Run(":" + cfg.GetServerConfig().Port); err != nil {
+		appLogger.Fatalf("start server failed: %v", err)
+	}
 }

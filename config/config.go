@@ -1,12 +1,14 @@
 package config
 
-import (
-	"log"
+import "github.com/spf13/viper"
 
-	"github.com/spf13/viper"
-)
+type App struct {
+	Mysql  MysqlConfig      `mapstructure:"mysql"`
+	Server ServerConfigItem `mapstructure:"server"`
+	Redis  RedisConfig      `mapstructure:"redis"`
+	Jwt    JwtConfig        `mapstructure:"jwt"`
+}
 
-// 抽象层，便于mock测试
 type ConfigProvider interface {
 	GetMysqlConfig() MysqlConfig
 	GetRedisConfig() RedisConfig
@@ -14,66 +16,57 @@ type ConfigProvider interface {
 	GetJwtConfig() JwtConfig
 }
 
-func (c *ServerConfig) GetMysqlConfig() MysqlConfig {
+type ServerConfigItem struct {
+	Port string `mapstructure:"port"`
+}
+
+type RedisConfig struct {
+	Host     string `mapstructure:"host"`
+	Port     string `mapstructure:"port"`
+	Password string `mapstructure:"password"`
+	Db       int    `mapstructure:"db"`
+}
+
+type MysqlConfig struct {
+	Host     string `mapstructure:"host"`
+	Port     string `mapstructure:"port"`
+	Dbname   string `mapstructure:"dbname"`
+	Username string `mapstructure:"username"`
+	Password string `mapstructure:"password"`
+}
+
+type JwtConfig struct {
+	Secret string `mapstructure:"secret"`
+}
+
+func (c *App) GetMysqlConfig() MysqlConfig {
 	return c.Mysql
 }
-func (c *ServerConfig) GetRedisConfig() RedisConfig {
+
+func (c *App) GetRedisConfig() RedisConfig {
 	return c.Redis
 }
-func (c *ServerConfig) GetServerConfig() ServerConfigItem {
+
+func (c *App) GetServerConfig() ServerConfigItem {
 	return c.Server
 }
-func (c *ServerConfig) GetJwtConfig() JwtConfig {
+
+func (c *App) GetJwtConfig() JwtConfig {
 	return c.Jwt
 }
 
-type ServerConfig struct {
-	Mysql  MysqlConfig
-	Server ServerConfigItem
-	Redis  RedisConfig
-	Jwt    JwtConfig
-}
-type ServerConfigItem struct {
-	Port string
-}
-type RedisConfig struct {
-	Host     string
-	Port     string
-	Password string
-	Db       int
-}
-type MysqlConfig struct {
-	Host     string
-	Port     string
-	Dbname   string
-	Username string
-	Password string
-}
-type JwtConfig struct {
-	Secret string
-}
+func Load(filePath string) (*App, error) {
+	v := viper.New()
+	v.SetConfigFile(filePath)
 
-func InitConfig(filePath string) (ConfigProvider, error) {
-	viper.SetConfigFile(filePath)
-	if err := viper.ReadInConfig(); err != nil {
-		log.Printf("读取配置文件失败: %v", err)
+	if err := v.ReadInConfig(); err != nil {
 		return nil, err
 	}
-	var cfg ServerConfig
-	if err := viper.Unmarshal(&cfg); err != nil {
-		log.Printf("解析配置文件失败: %v", err)
+
+	var cfg App
+	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, err
 	}
-	log.Println("✅ 配置文件加载成功")
+
 	return &cfg, nil
-}
-
-var GlobalConfig ConfigProvider
-
-func InitGlobalConfig() {
-	cfg, err := InitConfig("config/config.yaml")
-	if err != nil {
-		log.Fatal("初始化配置失败:", err)
-	}
-	GlobalConfig = cfg
 }
