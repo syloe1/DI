@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"go-admin/core"
 	"go-admin/internal/repository"
 	"go-admin/model"
@@ -13,11 +15,17 @@ import (
 
 type PostAPI struct {
 	postRepo          repository.PostRepository
+	cache             repository.UserCache
+	ctx               context.Context
 	interactExtension postInteractExtension
 }
 
-func NewPostAPI(postRepo repository.PostRepository) *PostAPI {
-	return &PostAPI{postRepo: postRepo}
+func NewPostAPI(postRepo repository.PostRepository, cache repository.UserCache, ctx context.Context) *PostAPI {
+	return &PostAPI{
+		postRepo: postRepo,
+		cache:    cache,
+		ctx:      ctx,
+	}
 }
 
 type postInteractExtension interface {
@@ -77,15 +85,61 @@ func (api *PostAPI) CreatePost(c *gin.Context) {
 		return
 	}
 
+	api.invalidatePostListCaches(post.Topics)
 	core.Success(c, post)
 }
 
 func (api *PostAPI) GetPostList(c *gin.Context) {
 	topic := c.Query("topic")
+	key := api.postListCacheKey(topic)
+
+	if val, err := api.cache.Get(api.ctx, key); err == nil {
+		if val == cacheNullValue {
+			core.Success(c, []model.Post{})
+			return
+		}
+
+		var posts []model.Post
+		if err := json.Unmarshal([]byte(val), &posts); err == nil {
+			core.Success(c, posts)
+			return
+		}
+	}
+
+	lockKey := "lock:" + key
+	locked, err := api.cache.SetNX(api.ctx, lockKey, "1", cacheLockTTL)
+	if err == nil && !locked {
+		if val, ok := spinWaitCache(api.cache, api.ctx, key); ok {
+			if val == cacheNullValue {
+				core.Success(c, []model.Post{})
+				return
+			}
+
+			var posts []model.Post
+			if err := json.Unmarshal([]byte(val), &posts); err == nil {
+				core.Success(c, posts)
+				return
+			}
+		}
+	}
+	if locked {
+		defer api.cache.Del(api.ctx, lockKey)
+	}
+
 	posts, err := api.postRepo.FindPublicByTopic(topic)
 	if err != nil {
 		core.Fail(c, http.StatusInternalServerError, "查询帖子失败: "+err.Error())
 		return
+	}
+
+	if len(posts) == 0 {
+		_ = api.cache.Set(api.ctx, key, cacheNullValue, cacheNullTTL)
+		core.Success(c, posts)
+		return
+	}
+
+	if data, err := json.Marshal(posts); err == nil {
+		_ = api.cache.Set(api.ctx, key, string(data), jitterTTL(defaultCacheTTL))
 	}
 
 	core.Success(c, posts)
@@ -95,9 +149,52 @@ func (api *PostAPI) GetPost(c *gin.Context) {
 	id := c.Param("id")
 	currentUserID := c.GetUint("userID")
 	currentUserRole := c.GetString("role")
+	key := "post:" + id
+
+	if val, err := api.cache.Get(api.ctx, key); err == nil {
+		if val == cacheNullValue {
+			core.Fail(c, http.StatusNotFound, "帖子不存在")
+			return
+		}
+
+		var post model.Post
+		if err := json.Unmarshal([]byte(val), &post); err == nil {
+			if !post.IsPublic && post.UserID != currentUserID && currentUserRole != "admin" && currentUserRole != "superadmin" {
+				core.Fail(c, http.StatusForbidden, "无权查看此帖子")
+				return
+			}
+			core.Success(c, post)
+			return
+		}
+	}
+
+	lockKey := "lock:" + key
+	locked, err := api.cache.SetNX(api.ctx, lockKey, "1", cacheLockTTL)
+	if err == nil && !locked {
+		if val, ok := spinWaitCache(api.cache, api.ctx, key); ok {
+			if val == cacheNullValue {
+				core.Fail(c, http.StatusNotFound, "帖子不存在")
+				return
+			}
+
+			var post model.Post
+			if err := json.Unmarshal([]byte(val), &post); err == nil {
+				if !post.IsPublic && post.UserID != currentUserID && currentUserRole != "admin" && currentUserRole != "superadmin" {
+					core.Fail(c, http.StatusForbidden, "无权查看此帖子")
+					return
+				}
+				core.Success(c, post)
+				return
+			}
+		}
+	}
+	if locked {
+		defer api.cache.Del(api.ctx, lockKey)
+	}
 
 	post, err := api.postRepo.FindByID(id)
 	if err != nil {
+		_ = api.cache.Set(api.ctx, key, cacheNullValue, cacheNullTTL)
 		core.Fail(c, http.StatusNotFound, "帖子不存在")
 		return
 	}
@@ -105,6 +202,10 @@ func (api *PostAPI) GetPost(c *gin.Context) {
 	if !post.IsPublic && post.UserID != currentUserID && currentUserRole != "admin" && currentUserRole != "superadmin" {
 		core.Fail(c, http.StatusForbidden, "无权查看此帖子")
 		return
+	}
+
+	if data, err := json.Marshal(post); err == nil {
+		_ = api.cache.Set(api.ctx, key, string(data), jitterTTL(defaultCacheTTL))
 	}
 
 	core.Success(c, post)
@@ -131,6 +232,7 @@ func (api *PostAPI) DeletePost(c *gin.Context) {
 		return
 	}
 
+	api.invalidatePostCache(id, post.Topics)
 	core.SuccessWithMessage(c, "删除成功", nil)
 }
 
@@ -149,6 +251,8 @@ func (api *PostAPI) UpdatePost(c *gin.Context) {
 		return
 	}
 
+	oldTopics := post.Topics
+
 	var req struct {
 		Title     string  `json:"title"`
 		Content   string  `json:"content"`
@@ -161,12 +265,14 @@ func (api *PostAPI) UpdatePost(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req)
 
 	updates := map[string]interface{}{}
+	newTopics := oldTopics
 	if req.Title != "" {
 		updates["title"] = req.Title
 	}
 	if req.Content != "" {
+		newTopics = extractTopics(req.Content, req.Topics)
 		updates["content"] = req.Content
-		updates["topics"] = extractTopics(req.Content, req.Topics)
+		updates["topics"] = newTopics
 	}
 	if req.IsPublic != nil {
 		updates["is_public"] = *req.IsPublic
@@ -194,6 +300,7 @@ func (api *PostAPI) UpdatePost(c *gin.Context) {
 		return
 	}
 
+	api.invalidatePostCache(id, oldTopics, newTopics)
 	core.SuccessWithMessage(c, "修改成功", nil)
 }
 
@@ -324,4 +431,38 @@ func extractTopics(content, extra string) string {
 		res = append(res, t)
 	}
 	return strings.Join(res, ",")
+}
+
+func (api *PostAPI) postListCacheKey(topic string) string {
+	key := "post:list"
+	if topic != "" {
+		key += ":topic:" + topic
+	}
+	return key
+}
+
+func (api *PostAPI) invalidatePostCache(id string, topics ...string) {
+	keys := []string{"post:" + id, "post:list"}
+	api.appendTopicCacheKeys(&keys, topics...)
+	_ = api.cache.Del(api.ctx, keys...)
+}
+
+func (api *PostAPI) invalidatePostListCaches(topics ...string) {
+	keys := []string{"post:list"}
+	api.appendTopicCacheKeys(&keys, topics...)
+	_ = api.cache.Del(api.ctx, keys...)
+}
+
+func (api *PostAPI) appendTopicCacheKeys(keys *[]string, topics ...string) {
+	for _, topicGroup := range topics {
+		if topicGroup == "" {
+			continue
+		}
+		for _, topic := range strings.Split(topicGroup, ",") {
+			topic = strings.TrimSpace(topic)
+			if topic != "" {
+				*keys = append(*keys, api.postListCacheKey(topic))
+			}
+		}
+	}
 }

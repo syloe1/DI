@@ -42,7 +42,7 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 	jwtCfg := &repository.DefaultJWTConfig{Secret: jwtSecret}
 
 	userService := api.NewUserService(userDB, userCache, jwtCfg, jwtSecret, ctx)
-	postAPI := api.NewPostAPI(postRepo)
+	postAPI := api.NewPostAPI(postRepo, userCache, ctx)
 	commentAPI := api.NewCommentAPI(commentRepo)
 	interactAPI := api.NewInteractAPI(interactRepo)
 	socialAPI := api.NewSocialAPI(socialRepo)

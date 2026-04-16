@@ -8,6 +8,9 @@ import (
 
 // InteractRepository 定义互动相关的数据库操作接口
 type InteractRepository interface {
+	WithTx(tx *gorm.DB) InteractRepository
+	Transaction(fn func(repo InteractRepository) error) error
+
 	// 点赞相关
 	FindLike(userID uint, postID uint) (*model.Like, error)
 	CreateLike(like *model.Like) error
@@ -41,6 +44,16 @@ type GormInteractRepository struct {
 // NewGormInteractRepository 构造函数：注入DB依赖
 func NewGormInteractRepository(db *gorm.DB) *GormInteractRepository {
 	return &GormInteractRepository{db: db}
+}
+
+func (r *GormInteractRepository) WithTx(tx *gorm.DB) InteractRepository {
+	return &GormInteractRepository{db: tx}
+}
+
+func (r *GormInteractRepository) Transaction(fn func(repo InteractRepository) error) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return fn(r.WithTx(tx))
+	})
 }
 
 // 点赞相关方法
