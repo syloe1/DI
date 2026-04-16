@@ -7,6 +7,9 @@ import (
 
 // SocialRepository 定义社交相关的数据库操作接口
 type SocialRepository interface {
+	WithTx(tx *gorm.DB) SocialRepository
+	Transaction(fn func(repo SocialRepository) error) error
+
 	// 关注相关
 	FindFollowRelation(fromUID uint, toUID uint) (*model.UserRelation, error)
 	CreateFollowRelation(relation *model.UserRelation) error
@@ -37,6 +40,16 @@ type GormSocialRepository struct {
 // NewGormSocialRepository 构造函数：注入DB依赖
 func NewGormSocialRepository(db *gorm.DB) *GormSocialRepository {
 	return &GormSocialRepository{db: db}
+}
+
+func (r *GormSocialRepository) WithTx(tx *gorm.DB) SocialRepository {
+	return &GormSocialRepository{db: tx}
+}
+
+func (r *GormSocialRepository) Transaction(fn func(repo SocialRepository) error) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return fn(r.WithTx(tx))
+	})
 }
 
 // 关注相关方法

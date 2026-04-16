@@ -10,6 +10,7 @@ import (
 	"github.com/golang-jwt/jwt/v4"
 )
 
+// Claims JWT声明结构
 type Claims struct {
 	UserId   uint   `json:"userId"`
 	Username string `json:"username"`
@@ -25,7 +26,6 @@ func JWTAuth(secret []byte) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-
 		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 		claims := &Claims{}
 		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
@@ -39,7 +39,6 @@ func JWTAuth(secret []byte) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-
 		c.Set("userID", claims.UserId)
 		c.Set("username", claims.Username)
 		c.Set("role", claims.Role)

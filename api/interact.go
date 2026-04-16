@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // InteractAPI 封装互动相关的处理器，持有依赖
@@ -31,34 +32,49 @@ func (api *InteractAPI) ToggleLike(c *gin.Context) {
 		return
 	}
 
-	// 使用依赖注入的Repository查询点赞状态
-	like, err := api.interactRepo.FindLike(userID, uint(postID))
+	liked := false
+	err = api.interactRepo.Transaction(func(repoWithTx repository.InteractRepository) error {
+		like, err := repoWithTx.FindLike(userID, uint(postID))
+		if err != nil {
+			if err != gorm.ErrRecordNotFound {
+				return err
+			}
 
+			dislike, err := repoWithTx.FindDislike(userID, uint(postID))
+			if err == nil && dislike != nil {
+				if err := repoWithTx.DeleteDislike(dislike); err != nil {
+					return err
+				}
+			} else if err != nil && err != gorm.ErrRecordNotFound {
+				return err
+			}
+
+			newLike := &model.Like{
+				UserID: userID,
+				PostID: uint(postID),
+			}
+			if err := repoWithTx.CreateLike(newLike); err != nil {
+				return err
+			}
+
+			liked = true
+			return nil
+		}
+
+		if err := repoWithTx.DeleteLike(like); err != nil {
+			return err
+		}
+
+		liked = false
+		return nil
+	})
 	if err != nil {
-		// 没点赞 → 点赞
-		// 先检查是否已点踩，如果已点踩则取消点踩（点赞和点踩互斥）
-		dislike, _ := api.interactRepo.FindDislike(userID, uint(postID))
-		if dislike != nil {
-			api.interactRepo.DeleteDislike(dislike)
-		}
-
-		// 创建点赞
-		newLike := &model.Like{
-			UserID: userID,
-			PostID: uint(postID),
-		}
-		if err := api.interactRepo.CreateLike(newLike); err != nil {
-			core.Fail(c, http.StatusInternalServerError, "点赞失败")
-			return
-		}
-
-		core.Success(c, gin.H{"status": true, "message": "点赞成功"})
+		core.Fail(c, http.StatusInternalServerError, "点赞失败")
 		return
 	}
 
-	// 已点赞 → 取消点赞
-	if err := api.interactRepo.DeleteLike(like); err != nil {
-		core.Fail(c, http.StatusInternalServerError, "取消点赞失败")
+	if liked {
+		core.Success(c, gin.H{"status": true, "message": "点赞成功"})
 		return
 	}
 
@@ -76,37 +92,46 @@ func (api *InteractAPI) ToggleDislike(c *gin.Context) {
 		return
 	}
 
-	// 使用依赖注入的Repository查询点踩状态
-	dislike, err := api.interactRepo.FindDislike(userID, uint(postID))
+	disliked := false
+	err = api.interactRepo.Transaction(func(repoWithTx repository.InteractRepository) error {
+		dislike, err := repoWithTx.FindDislike(userID, uint(postID))
+		if err != nil {
+			if err != gorm.ErrRecordNotFound {
+				return err
+			}
+			like, err := repoWithTx.FindLike(userID, uint(postID))
+			if err == nil && like != nil {
+				if err := repoWithTx.DeleteLike(like); err != nil {
+					return err
+				}
+			} else if err != nil && err != gorm.ErrRecordNotFound {
+				return err
+			}
 
+			newDislike := &model.Dislike{
+				UserID: userID,
+				PostID: uint(postID),
+			}
+			if err := repoWithTx.CreateDislike(newDislike); err != nil {
+				return err
+			}
+			disliked = true
+			return nil
+		}
+		if err := repoWithTx.DeleteDislike(dislike); err != nil {
+			return err
+		}
+		disliked = false
+		return nil
+	})
 	if err != nil {
-		// 没点踩 → 点踩
-		// 先检查是否已点赞，如果已点赞则取消点赞（点赞和点踩互斥）
-		like, _ := api.interactRepo.FindLike(userID, uint(postID))
-		if like != nil {
-			api.interactRepo.DeleteLike(like)
-		}
-
-		// 创建点踩
-		newDislike := &model.Dislike{
-			UserID: userID,
-			PostID: uint(postID),
-		}
-		if err := api.interactRepo.CreateDislike(newDislike); err != nil {
-			core.Fail(c, http.StatusInternalServerError, "点踩失败")
-			return
-		}
-
+		core.Fail(c, http.StatusInternalServerError, "点踩失败")
+		return
+	}
+	if disliked {
 		core.Success(c, gin.H{"status": true, "message": "点踩成功"})
 		return
 	}
-
-	// 已点踩 → 取消点踩
-	if err := api.interactRepo.DeleteDislike(dislike); err != nil {
-		core.Fail(c, http.StatusInternalServerError, "取消点踩失败")
-		return
-	}
-
 	core.Success(c, gin.H{"status": false, "message": "取消点踩"})
 }
 

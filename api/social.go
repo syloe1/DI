@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // SocialAPI 封装社交相关的处理器，持有依赖
@@ -22,7 +23,12 @@ func NewSocialAPI(socialRepo repository.SocialRepository) *SocialAPI {
 
 // FollowUser 关注/取消关注用户
 func (api *SocialAPI) FollowUser(c *gin.Context) {
-	toUID, _ := strconv.Atoi(c.Param("uid"))
+	toUID, err := strconv.Atoi(c.Param("uid"))
+	if err != nil {
+		core.Fail(c, http.StatusBadRequest, "无效的用户ID")
+		return
+	}
+
 	fromUID := c.GetUint("userID")
 
 	if uint(toUID) == fromUID {
@@ -37,19 +43,43 @@ func (api *SocialAPI) FollowUser(c *gin.Context) {
 		return
 	}
 
-	// 使用依赖注入的Repository查询关注状态
-	existing, err := api.socialRepo.FindFollowRelation(fromUID, uint(toUID))
+	following := false
+	err = api.socialRepo.Transaction(func(repoWithTx repository.SocialRepository) error {
+		existing, err := repoWithTx.FindFollowRelation(fromUID, uint(toUID))
+		if err != nil {
+			if err != gorm.ErrRecordNotFound {
+				return err
+			}
 
-	if err == nil {
-		// 已关注，取消关注
-		if err := api.socialRepo.DeleteFollowRelation(existing); err != nil {
-			core.Fail(c, http.StatusInternalServerError, "取消关注失败")
-			return
+			newRelation := &model.UserRelation{
+				FromUID: fromUID,
+				ToUID:   uint(toUID),
+				Type:    "follow",
+			}
+			if err := repoWithTx.CreateFollowRelation(newRelation); err != nil {
+				return err
+			}
+
+			following = true
+			return nil
 		}
 
+		if err := repoWithTx.DeleteFollowRelation(existing); err != nil {
+			return err
+		}
+
+		following = false
+		return nil
+	})
+	if err != nil {
+		core.Fail(c, http.StatusInternalServerError, "关注失败")
+		return
+	}
+
+	if following {
 		core.Success(c, gin.H{
-			"action":  "unfollow",
-			"message": "已取消关注",
+			"action":  "follow",
+			"message": "关注成功",
 			"target_user": gin.H{
 				"id":       toUser.ID,
 				"username": toUser.Username,
@@ -58,21 +88,9 @@ func (api *SocialAPI) FollowUser(c *gin.Context) {
 		return
 	}
 
-	// 未关注，添加关注
-	newRelation := &model.UserRelation{
-		FromUID: fromUID,
-		ToUID:   uint(toUID),
-		Type:    "follow",
-	}
-
-	if err := api.socialRepo.CreateFollowRelation(newRelation); err != nil {
-		core.Fail(c, http.StatusInternalServerError, "关注失败")
-		return
-	}
-
 	core.Success(c, gin.H{
-		"action":  "follow",
-		"message": "关注成功",
+		"action":  "unfollow",
+		"message": "已取消关注",
 		"target_user": gin.H{
 			"id":       toUser.ID,
 			"username": toUser.Username,
@@ -82,7 +100,12 @@ func (api *SocialAPI) FollowUser(c *gin.Context) {
 
 // BlockUser 拉黑/取消拉黑用户
 func (api *SocialAPI) BlockUser(c *gin.Context) {
-	toUID, _ := strconv.Atoi(c.Param("uid"))
+	toUID, err := strconv.Atoi(c.Param("uid"))
+	if err != nil {
+		core.Fail(c, http.StatusBadRequest, "无效的用户ID")
+		return
+	}
+
 	fromUID := c.GetUint("userID")
 
 	if uint(toUID) == fromUID {
@@ -97,19 +120,38 @@ func (api *SocialAPI) BlockUser(c *gin.Context) {
 		return
 	}
 
-	// 使用依赖注入的Repository查询拉黑状态
-	existing, err := api.socialRepo.FindBlockRelation(fromUID, uint(toUID))
-
-	if err == nil {
-		// 已拉黑，取消拉黑
-		if err := api.socialRepo.DeleteBlockRelation(existing); err != nil {
-			core.Fail(c, http.StatusInternalServerError, "取消拉黑失败")
-			return
+	blocking := false
+	err = api.socialRepo.Transaction(func(repoWithTx repository.SocialRepository) error {
+		existing, err := repoWithTx.FindBlockRelation(fromUID, uint(toUID))
+		if err != nil {
+			if err != gorm.ErrRecordNotFound {
+				return err
+			}
+			newRelation := &model.UserRelation{
+				FromUID: fromUID,
+				ToUID:   uint(toUID),
+				Type:    "block",
+			}
+			if err := repoWithTx.CreateBlockRelation(newRelation); err != nil {
+				return err
+			}
+			blocking = true
+			return nil
 		}
-
+		if err := repoWithTx.DeleteBlockRelation(existing); err != nil {
+			return err
+		}
+		blocking = false
+		return nil
+	})
+	if err != nil {
+		core.Fail(c, http.StatusInternalServerError, "拉黑失败")
+		return
+	}
+	if blocking {
 		core.Success(c, gin.H{
-			"action":  "unblock",
-			"message": "已取消拉黑",
+			"action":  "block",
+			"message": "拉黑成功",
 			"target_user": gin.H{
 				"id":       toUser.ID,
 				"username": toUser.Username,
@@ -117,22 +159,9 @@ func (api *SocialAPI) BlockUser(c *gin.Context) {
 		})
 		return
 	}
-
-	// 未拉黑，添加拉黑
-	newRelation := &model.UserRelation{
-		FromUID: fromUID,
-		ToUID:   uint(toUID),
-		Type:    "block",
-	}
-
-	if err := api.socialRepo.CreateBlockRelation(newRelation); err != nil {
-		core.Fail(c, http.StatusInternalServerError, "拉黑失败")
-		return
-	}
-
 	core.Success(c, gin.H{
-		"action":  "block",
-		"message": "拉黑成功",
+		"action":  "unblock",
+		"message": "已取消拉黑",
 		"target_user": gin.H{
 			"id":       toUser.ID,
 			"username": toUser.Username,
