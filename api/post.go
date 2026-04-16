@@ -12,11 +12,25 @@ import (
 )
 
 type PostAPI struct {
-	postRepo repository.PostRepository
+	postRepo          repository.PostRepository
+	interactExtension postInteractExtension
 }
 
 func NewPostAPI(postRepo repository.PostRepository) *PostAPI {
 	return &PostAPI{postRepo: postRepo}
+}
+
+type postInteractExtension interface {
+	GetInteractCount(c *gin.Context)
+	ToggleLike(c *gin.Context)
+	ToggleDislike(c *gin.Context)
+	ToggleCollect(c *gin.Context)
+	Share(c *gin.Context)
+	GetInteractStatus(c *gin.Context)
+}
+
+func (api *PostAPI) SetInteractExtension(extension postInteractExtension) {
+	api.interactExtension = extension
 }
 
 func (api *PostAPI) CreatePost(c *gin.Context) {
@@ -236,6 +250,54 @@ func (api *PostAPI) GetUserCollectedPosts(c *gin.Context) {
 	}
 
 	core.SuccessWithMessage(c, "获取用户收藏帖子成功", posts)
+}
+
+func (api *PostAPI) GetInteractCount(c *gin.Context) {
+	if api.interactExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "互动统计功能暂未实现")
+		return
+	}
+	api.interactExtension.GetInteractCount(c)
+}
+
+func (api *PostAPI) ToggleLike(c *gin.Context) {
+	if api.interactExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "点赞功能暂未实现")
+		return
+	}
+	api.interactExtension.ToggleLike(c)
+}
+
+func (api *PostAPI) ToggleDislike(c *gin.Context) {
+	if api.interactExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "点踩功能暂未实现")
+		return
+	}
+	api.interactExtension.ToggleDislike(c)
+}
+
+func (api *PostAPI) ToggleCollect(c *gin.Context) {
+	if api.interactExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "收藏功能暂未实现")
+		return
+	}
+	api.interactExtension.ToggleCollect(c)
+}
+
+func (api *PostAPI) Share(c *gin.Context) {
+	if api.interactExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "分享功能暂未实现")
+		return
+	}
+	api.interactExtension.Share(c)
+}
+
+func (api *PostAPI) GetInteractStatus(c *gin.Context) {
+	if api.interactExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "互动状态功能暂未实现")
+		return
+	}
+	api.interactExtension.GetInteractStatus(c)
 }
 
 func extractTopics(content, extra string) string {
