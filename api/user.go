@@ -16,11 +16,15 @@ import (
 )
 
 type UserService struct {
-	db     repository.UserDB
-	cache  repository.UserCache
-	jwtCfg repository.JWTConfig
-	jwtKey []byte
-	ctx    context.Context
+	db                repository.UserDB
+	cache             repository.UserCache
+	jwtCfg            repository.JWTConfig
+	jwtKey            []byte
+	ctx               context.Context
+	interactExtension userInteractExtension
+	socialExtension   userSocialExtension
+	messageExtension  userMessageExtension
+	wsExtension       userWSExtension
 }
 
 // NewUserService 构造函数，依赖注入
@@ -32,6 +36,50 @@ func NewUserService(db repository.UserDB, cache repository.UserCache, jwtCfg rep
 		jwtKey: jwtKey,
 		ctx:    ctx,
 	}
+}
+
+type userInteractExtension interface {
+	GetInteractCount(c *gin.Context)
+	ToggleLike(c *gin.Context)
+	ToggleDislike(c *gin.Context)
+	ToggleCollect(c *gin.Context)
+	Share(c *gin.Context)
+	GetInteractStatus(c *gin.Context)
+}
+
+type userSocialExtension interface {
+	FollowUser(c *gin.Context)
+	BlockUser(c *gin.Context)
+	GetRelationStatus(c *gin.Context)
+	GetFollowList(c *gin.Context)
+	GetFollowerList(c *gin.Context)
+	GetBlockList(c *gin.Context)
+}
+
+type userMessageExtension interface {
+	GetConversations(c *gin.Context)
+	GetMessageList(c *gin.Context)
+	SendMessage(c *gin.Context)
+}
+
+type userWSExtension interface {
+	HandleWebSocket(c *gin.Context)
+}
+
+func (s *UserService) SetInteractExtension(extension userInteractExtension) {
+	s.interactExtension = extension
+}
+
+func (s *UserService) SetSocialExtension(extension userSocialExtension) {
+	s.socialExtension = extension
+}
+
+func (s *UserService) SetMessageExtension(extension userMessageExtension) {
+	s.messageExtension = extension
+}
+
+func (s *UserService) SetWSExtension(extension userWSExtension) {
+	s.wsExtension = extension
 }
 
 type Claims struct { //JWT载荷
@@ -499,4 +547,132 @@ func (s *UserService) BatchGetUserRoles(c *gin.Context) {
 	}
 
 	core.Success(c, roleMap)
+}
+
+func (s *UserService) HandleWebSocket(c *gin.Context) {
+	if s.wsExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "WebSocket功能暂未实现")
+		return
+	}
+	s.wsExtension.HandleWebSocket(c)
+}
+
+func (s *UserService) GetInteractCount(c *gin.Context) {
+	if s.interactExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "互动统计功能暂未实现")
+		return
+	}
+	s.interactExtension.GetInteractCount(c)
+}
+
+func (s *UserService) ToggleLike(c *gin.Context) {
+	if s.interactExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "点赞功能暂未实现")
+		return
+	}
+	s.interactExtension.ToggleLike(c)
+}
+
+func (s *UserService) ToggleDislike(c *gin.Context) {
+	if s.interactExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "点踩功能暂未实现")
+		return
+	}
+	s.interactExtension.ToggleDislike(c)
+}
+
+func (s *UserService) ToggleCollect(c *gin.Context) {
+	if s.interactExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "收藏功能暂未实现")
+		return
+	}
+	s.interactExtension.ToggleCollect(c)
+}
+
+func (s *UserService) Share(c *gin.Context) {
+	if s.interactExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "分享功能暂未实现")
+		return
+	}
+	s.interactExtension.Share(c)
+}
+
+func (s *UserService) GetInteractStatus(c *gin.Context) {
+	if s.interactExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "互动状态功能暂未实现")
+		return
+	}
+	s.interactExtension.GetInteractStatus(c)
+}
+
+func (s *UserService) FollowUser(c *gin.Context) {
+	if s.socialExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "关注功能暂未实现")
+		return
+	}
+	s.socialExtension.FollowUser(c)
+}
+
+func (s *UserService) BlockUser(c *gin.Context) {
+	if s.socialExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "拉黑功能暂未实现")
+		return
+	}
+	s.socialExtension.BlockUser(c)
+}
+
+func (s *UserService) GetRelationStatus(c *gin.Context) {
+	if s.socialExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "关系状态功能暂未实现")
+		return
+	}
+	s.socialExtension.GetRelationStatus(c)
+}
+
+func (s *UserService) GetFollowList(c *gin.Context) {
+	if s.socialExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "关注列表功能暂未实现")
+		return
+	}
+	s.socialExtension.GetFollowList(c)
+}
+
+func (s *UserService) GetFollowerList(c *gin.Context) {
+	if s.socialExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "粉丝列表功能暂未实现")
+		return
+	}
+	s.socialExtension.GetFollowerList(c)
+}
+
+func (s *UserService) GetBlockList(c *gin.Context) {
+	if s.socialExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "拉黑列表功能暂未实现")
+		return
+	}
+	s.socialExtension.GetBlockList(c)
+}
+
+func (s *UserService) GetConversations(c *gin.Context) {
+	if s.messageExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "会话列表功能暂未实现")
+		return
+	}
+	s.messageExtension.GetConversations(c)
+}
+
+func (s *UserService) GetMessageList(c *gin.Context) {
+	if s.messageExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "消息列表功能暂未实现")
+		return
+	}
+	s.messageExtension.GetMessageList(c)
+}
+
+func (s *UserService) SendMessage(c *gin.Context) {
+	if s.messageExtension == nil {
+		core.Fail(c, http.StatusNotImplemented, "发送消息功能暂未实现")
+		return
+	}
+	s.messageExtension.SendMessage(c)
 }

@@ -41,18 +41,32 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 	messageRepo := repository.NewGormMessageRepository(db)
 	jwtCfg := &repository.DefaultJWTConfig{Secret: jwtSecret}
 
+	userService := api.NewUserService(userDB, userCache, jwtCfg, jwtSecret, ctx)
+	postAPI := api.NewPostAPI(postRepo)
+	commentAPI := api.NewCommentAPI(commentRepo)
+	interactAPI := api.NewInteractAPI(interactRepo)
+	socialAPI := api.NewSocialAPI(socialRepo)
+	messageAPI := api.NewMessageAPI(messageRepo)
+	wsAPI := api.NewWSAPI(messageRepo, jwtSecret)
+
+	postAPI.SetInteractExtension(interactAPI)
+	userService.SetInteractExtension(interactAPI)
+	userService.SetSocialExtension(socialAPI)
+	userService.SetMessageExtension(messageAPI)
+	userService.SetWSExtension(wsAPI)
+
 	return &Container{
 		Config:      cfg,
 		Logger:      appLogger,
 		DB:          db,
 		Redis:       redisClient,
 		JWTSecret:   jwtSecret,
-		UserService: api.NewUserService(userDB, userCache, jwtCfg, jwtSecret, ctx),
-		PostAPI:     api.NewPostAPI(postRepo),
-		CommentAPI:  api.NewCommentAPI(commentRepo),
-		InteractAPI: api.NewInteractAPI(interactRepo),
-		SocialAPI:   api.NewSocialAPI(socialRepo),
-		MessageAPI:  api.NewMessageAPI(messageRepo),
-		WSAPI:       api.NewWSAPI(messageRepo, jwtSecret),
+		UserService: userService,
+		PostAPI:     postAPI,
+		CommentAPI:  commentAPI,
+		InteractAPI: interactAPI,
+		SocialAPI:   socialAPI,
+		MessageAPI:  messageAPI,
+		WSAPI:       wsAPI,
 	}
 }
