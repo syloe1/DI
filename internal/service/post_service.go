@@ -360,7 +360,7 @@ func extractTopics(content string, extra string) string {
 	words := strings.Fields(content)
 	for _, w := range words {
 		if strings.HasPrefix(w, "#") {
-			tag := strings.TrimRight(w[1:], ",锛屻€傦紒锛?!?")
+			tag := strings.TrimRight(w[1:], ",，。！？?!")
 			if tag != "" {
 				topicSet[tag] = true
 			}

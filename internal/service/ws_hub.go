@@ -48,11 +48,12 @@ func (h *WSHub) Run() {
 		case client := <-h.Register:
 			h.Mutex.Lock()
 			if old, ok := h.Clients[client.UserID]; ok {
-				close(old.Send)
-				_ = old.Conn.Close()
+				close(old.Send)      //关闭go通道
+				_ = old.Conn.Close() //关闭websocket网络连接
 			}
 			h.Clients[client.UserID] = client
 			h.Mutex.Unlock()
+			//判断redis缓存是否存在
 			if h.Cache != nil {
 				_ = h.Cache.SAdd(h.Ctx, OnlineUsersKey, client.UserID)
 			}
@@ -60,7 +61,8 @@ func (h *WSHub) Run() {
 		case client := <-h.Unregister:
 			h.Mutex.Lock()
 			if c, ok := h.Clients[client.UserID]; ok && c == client {
-				close(client.Send)
+				close(client.Send)      //关闭channel
+				_ = client.Conn.Close() //关闭websocket网络连接
 				delete(h.Clients, client.UserID)
 			}
 			h.Mutex.Unlock()

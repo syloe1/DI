@@ -6,7 +6,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// CommentRepository 瀹氫箟璇勮鐩稿叧鐨勬暟鎹簱鎿嶄綔鎺ュ彛
+// CommentRepository 定义评论相关的数据库操作接口
 type CommentRepository interface {
 	Create(comment *model.Comment) error
 	FindByID(id string) (*model.Comment, error)
@@ -18,12 +18,12 @@ type CommentRepository interface {
 	FindPostByID(postID uint) (*model.Post, error)
 }
 
-// GormCommentRepository 鍩轰簬GORM鐨勮瘎璁篟epository瀹炵幇
+// GormCommentRepository 基于 GORM 的评论 Repository 实现
 type GormCommentRepository struct {
 	db *gorm.DB
 }
 
-// NewGormCommentRepository 鏋勯€犲嚱鏁帮細娉ㄥ叆DB渚濊禆
+// NewGormCommentRepository 构造函数：注入 DB 依赖
 func NewGormCommentRepository(db *gorm.DB) *GormCommentRepository {
 	return &GormCommentRepository{db: db}
 }

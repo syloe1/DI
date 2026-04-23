@@ -431,6 +431,6 @@ jwt:
 
 ## 补充文档
 
-- 新功能开发模板：`NEW_FEATURE_TEMPLATE.md`
+- 新功能开发模板：`future.md`
 - API 测试文档：`TEST/test.md`
 

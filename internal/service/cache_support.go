@@ -18,10 +18,12 @@ const (
 	maxCacheJitter  = 120
 )
 
+// 缓存抖动TTL
 func jitterTTL(base time.Duration) time.Duration {
 	return base + time.Duration(rand.Intn(maxCacheJitter))*time.Second
 }
 
+// 缓存重试机制
 func spinWaitCache(cache dao.UserCache, ctx context.Context, key string) (string, bool) {
 	for i := 0; i < cacheRetryTimes; i++ {
 		time.Sleep(cacheRetryDelay)
