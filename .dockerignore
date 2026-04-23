@@ -1,0 +1,10 @@
+.git
+.gitignore
+.idea
+.vscode
+TEST
+*.md
+*.exe
+dist
+tmp
+node_modules

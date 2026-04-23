@@ -1,6 +1,10 @@
 package config
 
-import "github.com/spf13/viper"
+import (
+	"strings"
+
+	"github.com/spf13/viper"
+)
 
 type App struct {
 	Mysql  MysqlConfig      `mapstructure:"mysql"`
@@ -58,6 +62,9 @@ func (c *App) GetJwtConfig() JwtConfig {
 func Load(filePath string) (*App, error) {
 	v := viper.New()
 	v.SetConfigFile(filePath)
+	v.SetEnvPrefix("APP")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
 
 	if err := v.ReadInConfig(); err != nil {
 		return nil, err
