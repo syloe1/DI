@@ -78,7 +78,7 @@ func (s *WSService) BroadcastMessage(message interface{}) {
 		select {
 		case client.Send <- msgBytes:
 		default:
-			close(client.Send)
+			close(client.Send) //关闭channel
 			s.hub.Mutex.Lock()
 			delete(s.hub.Clients, client.UserID)
 			s.hub.Mutex.Unlock()

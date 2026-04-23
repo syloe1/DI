@@ -228,10 +228,10 @@ func (s *UserService) UpdateUser(id uint, currentUserID uint, currentRole string
 		return core.NewBizError(http.StatusInternalServerError, "update user failed")
 	}
 
-	s.cacheUserProfile(user)
-	_ = s.cache.SRem(s.ctx, OnlineUsersKey, id)
-	s.deleteUserProfileCache(id)
-	_ = s.cache.Del(s.ctx, fmt.Sprintf("user:%d", id), "user:list")
+	s.cacheUserProfile(user)                                        // 更新用户缓存
+	_ = s.cache.SRem(s.ctx, OnlineUsersKey, id)                     // 把用户踢下线（强制重新登录拿最新权限）
+	s.deleteUserProfileCache(id)                                    // 删除个人缓存
+	_ = s.cache.Del(s.ctx, fmt.Sprintf("user:%d", id), "user:list") // 删除用户列表缓存
 	return nil
 }
 
