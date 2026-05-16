@@ -17,5 +17,10 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.Share{},
 		&model.UserRelation{},
 		&model.Message{},
+		&model.ChatGroup{},
+		&model.ChatGroupMember{},
+		&model.ChatGroupInvitation{},
+		&model.ChatGroupJoinRequest{},
+		&model.ChatGroupMessage{},
 	)
 }

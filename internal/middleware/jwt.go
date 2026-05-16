@@ -13,7 +13,7 @@ import (
 // Claims 自定义JWT载荷结构体
 // 存储Token中包含的用户信息，用于接口鉴权
 type Claims struct {
-	UserId               uint   `json:"userId"`   // 用户ID
+	UserId               uint   `json:"user_id"`  // 用户ID
 	Username             string `json:"username"` // 用户名
 	Role                 string `json:"role"`     // 用户角色
 	jwt.RegisteredClaims        // JWT标准声明（过期时间、签发时间等）

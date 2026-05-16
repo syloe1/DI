@@ -9,3 +9,9 @@ type Message struct {
 	Content string `gorm:"type:text;not null" json:"content"`
 	IsRead  bool   `gorm:"default:false" json:"is_read"`
 }
+type ChatGroupMessage struct {
+	gorm.Model
+	GroupID   uint   `gorm:"not null;index" json:"group_id"`
+	SenderUID uint   `gorm:"not null;index" json:"sender_uid"`
+	Content   string `gorm:"type:text;not null" json:"content"`
+}

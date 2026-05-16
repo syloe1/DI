@@ -17,14 +17,18 @@ type WSService struct {
 	jwtSecret []byte
 }
 
-func NewWSService(messageRepo dao.MessageRepository, cache dao.UserCache, ctx context.Context, jwtSecret []byte) *WSService {
-	hub := NewWSHub(messageRepo, cache, ctx)
+func NewWSService(messageRepo dao.MessageRepository, groupRepo dao.GroupRepository, publisher GroupMessagePublisher, cache dao.UserCache, ctx context.Context, jwtSecret []byte) *WSService {
+	hub := NewWSHub(messageRepo, groupRepo, publisher, cache, ctx)
 	go hub.Run()
 
 	return &WSService{
 		hub:       hub,
 		jwtSecret: jwtSecret,
 	}
+}
+
+func (s *WSService) Hub() *WSHub {
+	return s.hub
 }
 
 func (s *WSService) AuthenticateToken(token string) (uint, error) {

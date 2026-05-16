@@ -5,9 +5,19 @@ import (
 	"go-admin/internal/container"
 	"go-admin/internal/router"
 	"go-admin/pkg/core"
+	"log"
+	"net/http"
+	_ "net/http/pprof" // 只需要匿名导入
 )
 
 func main() {
+	// ========== pprof 性能分析（后台独立运行）==========
+	go func() {
+		log.Println("✅ pprof 已启动: http://127.0.0.1:6060/debug/pprof")
+		if err := http.ListenAndServe("127.0.0.1:6060", nil); err != nil {
+			log.Fatalf("pprof 启动失败: %v", err)
+		}
+	}()
 	appLogger := core.NewLogger()
 
 	if err := core.RegisterCustomValidators(); err != nil {
@@ -33,7 +43,6 @@ func main() {
 	if err := core.AutoMigrate(db); err != nil {
 		appLogger.Fatalf("auto migrate failed: %v", err)
 	}
-
 	appContainer := container.NewContainer(cfg, db, redisClient, appLogger)
 	appLogger.Println("DI container initialized")
 
