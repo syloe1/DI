@@ -3,10 +3,11 @@ package config
 import "github.com/spf13/viper"
 
 type App struct {
-	Mysql  MysqlConfig      `mapstructure:"mysql"`
-	Server ServerConfigItem `mapstructure:"server"`
-	Redis  RedisConfig      `mapstructure:"redis"`
-	Jwt    JwtConfig        `mapstructure:"jwt"`
+	Mysql    MysqlConfig      `mapstructure:"mysql"`
+	Server   ServerConfigItem `mapstructure:"server"`
+	Redis    RedisConfig      `mapstructure:"redis"`
+	Jwt      JwtConfig        `mapstructure:"jwt"`
+	RabbitMQ RabbitMQConfig   `mapstructure:"rabbitmq"`
 }
 
 type ConfigProvider interface {
@@ -37,6 +38,11 @@ type MysqlConfig struct {
 
 type JwtConfig struct {
 	Secret string `mapstructure:"secret"`
+}
+type RabbitMQConfig struct {
+	URL      string `mapstructure:"url"`
+	Exchange string `mapstructure:"exchange"`
+	Queue    string `mapstructure:"queue"`
 }
 
 func (c *App) GetMysqlConfig() MysqlConfig {

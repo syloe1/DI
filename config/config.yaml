@@ -16,3 +16,8 @@ redis:
 
 jwt:
   secret: "syloe1-change-this-in-production"
+
+rabbitmq:
+  url: "amqp://guest:guest@127.0.0.1:5672/"
+  exchange: "chat.events"
+  queue: "group_message_push"

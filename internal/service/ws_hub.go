@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,16 +28,20 @@ type WSHub struct {
 	Unregister  chan *WSClient
 	Mutex       sync.RWMutex
 	MessageRepo dao.MessageRepository
+	GroupRepo   dao.GroupRepository
+	Publisher   GroupMessagePublisher
 	Cache       dao.UserCache
 	Ctx         context.Context
 }
 
-func NewWSHub(messageRepo dao.MessageRepository, cache dao.UserCache, ctx context.Context) *WSHub {
+func NewWSHub(messageRepo dao.MessageRepository, groupRepo dao.GroupRepository, publisher GroupMessagePublisher, cache dao.UserCache, ctx context.Context) *WSHub {
 	return &WSHub{
 		Clients:     make(map[uint]*WSClient),
 		Register:    make(chan *WSClient),
 		Unregister:  make(chan *WSClient),
 		MessageRepo: messageRepo,
+		GroupRepo:   groupRepo,
+		Publisher:   publisher,
 		Cache:       cache,
 		Ctx:         ctx,
 	}
@@ -130,6 +135,8 @@ func (c *WSClient) readPump() {
 		switch msgData.Type {
 		case "message":
 			c.handleMessage(msgData.ToUID, msgData.Content)
+		case "group_message":
+			c.handleGroupMessage(msgData.GroupID, msgData.Content)
 		case "ping":
 			c.handlePing()
 		}
@@ -139,11 +146,7 @@ func (c *WSClient) readPump() {
 func (c *WSClient) handleMessage(toUID uint, content string) {
 	_, err := c.Hub.MessageRepo.FindUserByID(toUID)
 	if err != nil {
-		errorMsg, _ := json.Marshal(dto.WSOutboundMessage{
-			Type:    "error",
-			Message: "user not found",
-		})
-		c.Send <- errorMsg
+		c.sendWSError("user not found")
 		return
 	}
 
@@ -176,10 +179,69 @@ func (c *WSClient) handleMessage(toUID uint, content string) {
 	c.Send <- confirmMsg
 }
 
+func (c *WSClient) handleGroupMessage(groupID uint, content string) {
+	content = strings.TrimSpace(content)
+	if groupID == 0 || content == "" {
+		c.sendWSError("invalid group message")
+		return
+	}
+
+	group, err := c.Hub.GroupRepo.FindGroupByID(groupID)
+	if err != nil {
+		c.sendWSError("group not found")
+		return
+	}
+	if group.Status != model.ChatGroupStatusNormal {
+		c.sendWSError("group is not available")
+		return
+	}
+
+	member, err := c.Hub.GroupRepo.FindMember(groupID, c.UserID)
+	if err != nil || member.Status != model.ChatGroupMemberStatusActive {
+		c.sendWSError("not a group member")
+		return
+	}
+
+	message := &model.ChatGroupMessage{
+		GroupID:   groupID,
+		SenderUID: c.UserID,
+		Content:   content,
+	}
+	if err := c.Hub.GroupRepo.CreateGroupMessage(message); err != nil {
+		c.sendWSError("send group message failed")
+		return
+	}
+
+	if c.Hub.Publisher == nil {
+		log.Printf("group message publisher is nil")
+		return
+	}
+
+	if err := c.Hub.Publisher.PublishGroupMessageCreated(c.Hub.Ctx, dto.GroupMessageCreatedEvent{
+		Type:      "group_message_created",
+		MessageID: message.ID,
+		GroupID:   groupID,
+		FromUID:   c.UserID,
+		Content:   content,
+		CreatedAt: message.CreatedAt,
+	}); err != nil {
+		log.Printf("publish group message event failed: %v", err)
+	}
+}
+
 func (c *WSClient) handlePing() {
 	pongMsg, _ := json.Marshal(dto.WSOutboundMessage{
 		Type: "pong",
 		Time: time.Now().Format(time.RFC3339),
 	})
 	c.Send <- pongMsg
+}
+
+func (c *WSClient) sendWSError(message string) {
+	errorMsg, _ := json.Marshal(dto.WSOutboundMessage{
+		Type:    "error",
+		Message: message,
+		Time:    time.Now().Format(time.RFC3339),
+	})
+	c.Send <- errorMsg
 }

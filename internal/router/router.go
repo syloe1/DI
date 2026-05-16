@@ -79,6 +79,25 @@ func InitDependencyInjectionRouter(container *container.Container) *gin.Engine {
 		auth.POST("/message/send", middleware.RateLimit("message:send", 2, 6, middleware.UserIDKey), container.MessageHandler.SendMessage)
 		auth.DELETE("/message/:id", container.MessageHandler.DeleteMessage)
 
+		// Group endpoints.
+		auth.POST("/groups", container.GroupHandler.CreateGroup)
+		auth.GET("/groups/my", container.GroupHandler.GetMyGroups)
+		auth.GET("/groups/:id", container.GroupHandler.GetGroupDetail)
+		auth.GET("/groups/:id/members", container.GroupHandler.GetGroupMembers)
+		auth.GET("/groups/:id/join-requests", container.GroupHandler.GetJoinRequests)
+		auth.POST("/groups/:id/admins", container.GroupHandler.SetAdmin)
+		auth.DELETE("/groups/:id/admins/:user_id", container.GroupHandler.CancelAdmin)
+		auth.DELETE("/groups/:id/members/:user_id", container.GroupHandler.KickMember)
+		auth.POST("/groups/:id/transfer-owner", container.GroupHandler.TransferOwner)
+		auth.POST("/groups/:id/dissolve", container.GroupHandler.DissolveGroup)
+		auth.POST("/groups/:id/invitations", container.GroupHandler.InviteMember)
+		auth.POST("/groups/invitations/:id/review", container.GroupHandler.ReviewInvitation)
+		auth.POST("/groups/:id/join-requests", container.GroupHandler.ApplyJoinGroup)
+		auth.POST("/groups/join-requests/:id/review", container.GroupHandler.ReviewJoinRequest)
+		auth.POST("/groups/:id/leave", container.GroupHandler.LeaveGroup)
+		auth.POST("/groups/:id/messages", container.GroupHandler.SendGroupMessage)
+		auth.GET("/groups/:id/messages", container.GroupHandler.GetGroupMessages)
+
 		// Admin-only endpoints.
 		admin := auth.Group("/")
 		admin.Use(middleware.AdminAuth())
