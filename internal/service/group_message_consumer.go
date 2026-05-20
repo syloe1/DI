@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"sync"
 	"time"
 
 	"go-admin/internal/dao"
@@ -13,11 +14,14 @@ import (
 	"github.com/rabbitmq/amqp091-go"
 )
 
+const defaultGroupMessageConsumerWorkers = 8
+
 type GroupMessageConsumer struct {
-	ch        *amqp091.Channel // RabbitMQ 通道
+	ch        *amqp091.Channel
 	queue     string
 	groupRepo dao.GroupRepository
 	hub       *WSHub
+	workers   int
 }
 
 func NewGroupMessageConsumer(ch *amqp091.Channel, queue string, groupRepo dao.GroupRepository, hub *WSHub) *GroupMessageConsumer {
@@ -26,26 +30,39 @@ func NewGroupMessageConsumer(ch *amqp091.Channel, queue string, groupRepo dao.Gr
 		queue:     queue,
 		groupRepo: groupRepo,
 		hub:       hub,
+		workers:   defaultGroupMessageConsumerWorkers,
 	}
 }
 
-// Start () 启动消费者
 func (c *GroupMessageConsumer) Start(ctx context.Context) error {
-	//监听队列，开始消费
-	deliveries, err := c.ch.Consume(
-		c.queue,
-		"",
-		false,
-		false,
-		false,
-		false,
-		nil,
-	)
+	if c.workers <= 0 {
+		c.workers = defaultGroupMessageConsumerWorkers
+	}
+
+	if err := c.ch.Qos(c.workers*2, 0, false); err != nil {
+		return err
+	}
+	//监听队列
+	deliveries, err := c.ch.Consume(c.queue, "", false, false, false, false, nil)
 	if err != nil {
 		return err
 	}
-	//开一个协程，无限循环监听消息
+
+	tasks := make(chan amqp091.Delivery, c.workers*2)
+	var wg sync.WaitGroup
+
+	for i := 0; i < c.workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.workerLoop(ctx, tasks)
+		}()
+	}
+
 	go func() {
+		defer close(tasks)
+		defer wg.Wait()
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -54,15 +71,12 @@ func (c *GroupMessageConsumer) Start(ctx context.Context) error {
 				if !ok {
 					return
 				}
-
-				if err := c.handleDelivery(d); err != nil {
-					log.Printf("consume group message event failed: %v", err)
-					//处理失败，把消息重新放回队列
+				select {
+				case <-ctx.Done():
 					_ = d.Nack(false, true)
-					continue
+					return
+				case tasks <- d:
 				}
-
-				_ = d.Ack(false)
 			}
 		}
 	}()
@@ -70,12 +84,30 @@ func (c *GroupMessageConsumer) Start(ctx context.Context) error {
 	return nil
 }
 
+func (c *GroupMessageConsumer) workerLoop(ctx context.Context, tasks <-chan amqp091.Delivery) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case d, ok := <-tasks:
+			if !ok {
+				return
+			}
+			if err := c.handleDelivery(d); err != nil {
+				log.Printf("consume group message event failed: %v", err)
+				_ = d.Nack(false, true)
+				continue
+			}
+			_ = d.Ack(false)
+		}
+	}
+}
+
 func (c *GroupMessageConsumer) handleDelivery(d amqp091.Delivery) error {
 	var event dto.GroupMessageCreatedEvent
 	if err := json.Unmarshal(d.Body, &event); err != nil {
 		return err
 	}
-
 	if event.Type != "group_message_created" {
 		return nil
 	}
@@ -105,8 +137,12 @@ func (c *GroupMessageConsumer) handleDelivery(d amqp091.Delivery) error {
 		return err
 	}
 
-	for _, m := range members {
-		c.hub.SendMessageToUser(m.UserID, out)
+	localUsers := c.hub.GetOnlineUserSet()
+	for _, member := range members {
+		if _, ok := localUsers[member.UserID]; !ok {
+			continue
+		}
+		c.hub.SendMessageToUser(member.UserID, out)
 	}
 
 	return nil
