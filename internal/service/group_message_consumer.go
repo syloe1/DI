@@ -14,23 +14,30 @@ import (
 	"github.com/rabbitmq/amqp091-go"
 )
 
-const defaultGroupMessageConsumerWorkers = 8
+const (
+	defaultGroupMessageConsumerWorkers = 8
+	defaultPushShardWorkers            = 16
+)
 
 type GroupMessageConsumer struct {
-	ch        *amqp091.Channel
-	queue     string
-	groupRepo dao.GroupRepository
-	hub       *WSHub
-	workers   int
+	ch          *amqp091.Channel
+	queue       string
+	groupRepo   dao.GroupRepository
+	groupCache  *GroupCacheService
+	hub         *WSHub
+	workers     int
+	pushWorkers int
 }
 
-func NewGroupMessageConsumer(ch *amqp091.Channel, queue string, groupRepo dao.GroupRepository, hub *WSHub) *GroupMessageConsumer {
+func NewGroupMessageConsumer(ch *amqp091.Channel, queue string, groupRepo dao.GroupRepository, groupCache *GroupCacheService, hub *WSHub) *GroupMessageConsumer {
 	return &GroupMessageConsumer{
-		ch:        ch,
-		queue:     queue,
-		groupRepo: groupRepo,
-		hub:       hub,
-		workers:   defaultGroupMessageConsumerWorkers,
+		ch:          ch,
+		queue:       queue,
+		groupRepo:   groupRepo,
+		groupCache:  groupCache,
+		hub:         hub,
+		workers:     defaultGroupMessageConsumerWorkers,
+		pushWorkers: defaultPushShardWorkers,
 	}
 }
 
@@ -42,7 +49,7 @@ func (c *GroupMessageConsumer) Start(ctx context.Context) error {
 	if err := c.ch.Qos(c.workers*2, 0, false); err != nil {
 		return err
 	}
-	//监听队列
+
 	deliveries, err := c.ch.Consume(c.queue, "", false, false, false, false, nil)
 	if err != nil {
 		return err
@@ -93,7 +100,7 @@ func (c *GroupMessageConsumer) workerLoop(ctx context.Context, tasks <-chan amqp
 			if !ok {
 				return
 			}
-			if err := c.handleDelivery(d); err != nil {
+			if err := c.handleDelivery(ctx, d); err != nil {
 				log.Printf("consume group message event failed: %v", err)
 				_ = d.Nack(false, true)
 				continue
@@ -103,7 +110,8 @@ func (c *GroupMessageConsumer) workerLoop(ctx context.Context, tasks <-chan amqp
 	}
 }
 
-func (c *GroupMessageConsumer) handleDelivery(d amqp091.Delivery) error {
+// 消费MQ队列里的群消息创建事件 + 推送在线用户
+func (c *GroupMessageConsumer) handleDelivery(ctx context.Context, d amqp091.Delivery) error {
 	var event dto.GroupMessageCreatedEvent
 	if err := json.Unmarshal(d.Body, &event); err != nil {
 		return err
@@ -111,7 +119,7 @@ func (c *GroupMessageConsumer) handleDelivery(d amqp091.Delivery) error {
 	if event.Type != "group_message_created" {
 		return nil
 	}
-
+	//查询群消息，检测群正常
 	group, err := c.groupRepo.FindGroupByID(event.GroupID)
 	if err != nil {
 		return err
@@ -119,12 +127,7 @@ func (c *GroupMessageConsumer) handleDelivery(d amqp091.Delivery) error {
 	if group.Status != model.ChatGroupStatusNormal {
 		return nil
 	}
-
-	members, err := c.groupRepo.ListActiveMembers(event.GroupID)
-	if err != nil {
-		return err
-	}
-
+	//组装消息
 	out, err := json.Marshal(dto.WSOutboundMessage{
 		Type:      "group_message",
 		MessageID: event.MessageID,
@@ -136,14 +139,69 @@ func (c *GroupMessageConsumer) handleDelivery(d amqp091.Delivery) error {
 	if err != nil {
 		return err
 	}
+	//获取群内 [活跃 + 在线]的用户切片
+	shards, err := c.targetOnlineShards(ctx, event.GroupID)
+	if err != nil {
+		return err
+	}
+	c.pushShards(ctx, shards, out)
+	return nil
+}
 
+func (c *GroupMessageConsumer) targetOnlineShards(ctx context.Context, groupID uint) ([][]uint, error) {
+	if c.groupCache != nil {
+		return c.groupCache.ActiveOnlineMemberIDsByShard(ctx, groupID)
+	}
+	//本地计算
+	members, err := c.groupRepo.ListActiveMembers(groupID)
+	if err != nil {
+		return nil, err
+	}
+	//全部放一个分片
+	shards := make([][]uint, 1)
 	localUsers := c.hub.GetOnlineUserSet()
 	for _, member := range members {
-		if _, ok := localUsers[member.UserID]; !ok {
-			continue
+		if _, ok := localUsers[member.UserID]; ok {
+			shards[0] = append(shards[0], member.UserID)
 		}
-		c.hub.SendMessageToUser(member.UserID, out)
+	}
+	return shards, nil
+}
+
+// 把群消息按16分片的在线用户， 用协程池推送给所有人
+func (c *GroupMessageConsumer) pushShards(ctx context.Context, shards [][]uint, payload []byte) {
+	if c.pushWorkers <= 0 {
+		c.pushWorkers = defaultPushShardWorkers
 	}
 
-	return nil
+	tasks := make(chan []uint, len(shards))
+	var wg sync.WaitGroup
+	//16个消费者协程
+	for i := 0; i < c.pushWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			//不断从tasks通道按任务
+			for users := range tasks {
+				//遍历分片的用户
+				for _, userID := range users {
+					select {
+					case <-ctx.Done():
+						return
+					default:
+						c.hub.SendMessageToUser(userID, payload)
+					}
+				}
+			}
+		}()
+	}
+
+	for _, users := range shards {
+		if len(users) == 0 {
+			continue
+		}
+		tasks <- users
+	}
+	close(tasks)
+	wg.Wait()
 }
