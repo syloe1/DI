@@ -2,6 +2,11 @@ package core
 
 import "github.com/rabbitmq/amqp091-go"
 
+const (
+	deadLetterExchangeSuffix = ".dlx"
+	deadLetterQueueSuffix    = ".dlq"
+)
+
 type RabbitMQ struct {
 	Conn           *amqp091.Connection
 	PublishChannel *amqp091.Channel
@@ -34,7 +39,30 @@ func NewRabbitMQ(url, exchange, queue string) (*RabbitMQ, error) {
 		return nil, err
 	}
 
-	if _, err := consumeCh.QueueDeclare(queue, true, false, false, false, nil); err != nil {
+	dlx := exchange + deadLetterExchangeSuffix
+	dlq := queue + deadLetterQueueSuffix
+	if err := consumeCh.ExchangeDeclare(dlx, "fanout", true, false, false, false, nil); err != nil {
+		_ = publishCh.Close()
+		_ = consumeCh.Close()
+		_ = conn.Close()
+		return nil, err
+	}
+	if _, err := consumeCh.QueueDeclare(dlq, true, false, false, false, nil); err != nil {
+		_ = publishCh.Close()
+		_ = consumeCh.Close()
+		_ = conn.Close()
+		return nil, err
+	}
+	if err := consumeCh.QueueBind(dlq, "", dlx, false, nil); err != nil {
+		_ = publishCh.Close()
+		_ = consumeCh.Close()
+		_ = conn.Close()
+		return nil, err
+	}
+
+	if _, err := consumeCh.QueueDeclare(queue, true, false, false, false, amqp091.Table{
+		"x-dead-letter-exchange": dlx,
+	}); err != nil {
 		_ = publishCh.Close()
 		_ = consumeCh.Close()
 		_ = conn.Close()

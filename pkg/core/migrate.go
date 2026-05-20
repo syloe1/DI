@@ -22,5 +22,6 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.ChatGroupInvitation{},
 		&model.ChatGroupJoinRequest{},
 		&model.ChatGroupMessage{},
+		&model.MessageOutbox{},
 	)
 }

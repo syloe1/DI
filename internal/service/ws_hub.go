@@ -11,6 +11,7 @@ import (
 	"go-admin/internal/dao"
 	"go-admin/internal/domain/model"
 	"go-admin/internal/dto"
+	"go-admin/pkg/core"
 
 	"github.com/gorilla/websocket"
 )
@@ -73,7 +74,9 @@ func (h *WSHub) SendMessageToUser(userID uint, message []byte) {
 
 	select {
 	case client.Send <- message:
+		core.Metrics.PushDelivered.Add(1)
 	default:
+		core.Metrics.PushDroppedSlow.Add(1)
 		h.dropSlowClient(client)
 	}
 }
@@ -109,13 +112,21 @@ func (h *WSHub) Shutdown(ctx context.Context) {
 }
 
 func (h *WSHub) registerClient(client *WSClient) {
+	isNewUser := false
 	h.Mutex.Lock()
-	if old, ok := h.Clients[client.UserID]; ok && old != client {
+	old, ok := h.Clients[client.UserID]
+	if !ok {
+		isNewUser = true
+	}
+	if ok && old != client {
 		close(old.Send)
 		_ = old.Conn.Close()
 	}
 	h.Clients[client.UserID] = client
 	h.Mutex.Unlock()
+	if isNewUser {
+		core.Metrics.OnlineConnections.Add(1)
+	}
 
 	if h.Cache != nil {
 		_ = h.Cache.SAdd(h.Ctx, OnlineUsersKey, client.UserID)
@@ -143,6 +154,7 @@ func (h *WSHub) unregisterClient(client *WSClient) {
 	if !removed {
 		return
 	}
+	core.Metrics.OnlineConnections.Add(-1)
 
 	if h.Cache != nil {
 		_ = h.Cache.SRem(h.Ctx, OnlineUsersKey, client.UserID)
@@ -274,29 +286,24 @@ func (c *WSClient) handleGroupMessage(groupID uint, content string) {
 		SenderUID: c.UserID,
 		Content:   content,
 	}
-	if err := c.Hub.GroupRepo.CreateGroupMessage(message); err != nil {
+	event := dto.GroupMessageCreatedEvent{
+		Type:      "group_message_created",
+		GroupID:   groupID,
+		FromUID:   c.UserID,
+		Content:   content,
+		CreatedAt: time.Now(),
+	}
+	if err := c.Hub.GroupRepo.CreateGroupMessageWithOutboxBuilder(message, func(saved *model.ChatGroupMessage) (*model.MessageOutbox, error) {
+		event.MessageID = saved.ID
+		event.CreatedAt = saved.CreatedAt
+		return buildGroupMessageOutbox(event)
+	}); err != nil {
 		c.sendWSError("send group message failed")
 		return
 	}
 
 	if c.Hub.GroupCache != nil {
 		_ = c.Hub.GroupCache.RefreshActiveMembers(c.Hub.Ctx, groupID)
-	}
-
-	if c.Hub.Publisher == nil {
-		log.Printf("group message publisher is nil")
-		return
-	}
-
-	if err := c.Hub.Publisher.PublishGroupMessageCreated(c.Hub.Ctx, dto.GroupMessageCreatedEvent{
-		Type:      "group_message_created",
-		MessageID: message.ID,
-		GroupID:   groupID,
-		FromUID:   c.UserID,
-		Content:   content,
-		CreatedAt: message.CreatedAt,
-	}); err != nil {
-		log.Printf("publish group message event failed: %v", err)
 	}
 }
 

@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -77,26 +76,19 @@ func (s *ChatService) HandleGroupMessage(ctx context.Context, req GroupMessageRe
 		SenderUID: uid,
 		Content:   content,
 	}
-	if err := s.groupRepo.CreateGroupMessage(message); err != nil {
-		return nil, core.NewBizError(http.StatusInternalServerError, "save group message failed")
+	event := dto.GroupMessageCreatedEvent{
+		Type:      "group_message_created",
+		GroupID:   groupID,
+		FromUID:   uid,
+		Content:   content,
+		CreatedAt: time.Now(),
 	}
-
-	if s.publisher != nil {
-		event := dto.GroupMessageCreatedEvent{
-			Type:      "group_message_created",
-			MessageID: message.ID,
-			GroupID:   groupID,
-			FromUID:   uid,
-			Content:   content,
-			CreatedAt: time.Now(),
-		}
-		body, err := json.Marshal(event)
-		if err != nil {
-			return nil, err
-		}
-		if err := s.publisher.Publish(ctx, s.exchange, "", body); err != nil {
-			return nil, err
-		}
+	if err := s.groupRepo.CreateGroupMessageWithOutboxBuilder(message, func(saved *model.ChatGroupMessage) (*model.MessageOutbox, error) {
+		event.MessageID = saved.ID
+		event.CreatedAt = saved.CreatedAt
+		return buildGroupMessageOutbox(event)
+	}); err != nil {
+		return nil, core.NewBizError(http.StatusInternalServerError, "save group message failed")
 	}
 
 	return &GroupMessageACK{
