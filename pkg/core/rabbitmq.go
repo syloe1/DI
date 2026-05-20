@@ -1,66 +1,72 @@
 package core
 
-import (
-	"github.com/rabbitmq/amqp091-go"
-)
+import "github.com/rabbitmq/amqp091-go"
 
 type RabbitMQ struct {
-	Conn *amqp091.Connection //TCP
-	//一个Conn可以开启多过分channel
-	Channel *amqp091.Channel //真正手法消息
+	Conn           *amqp091.Connection
+	PublishChannel *amqp091.Channel
+	ConsumeChannel *amqp091.Channel
 }
 
-// 返回可用的RabbitMQ实例
 func NewRabbitMQ(url, exchange, queue string) (*RabbitMQ, error) {
-	//建立连接
 	conn, err := amqp091.Dial(url)
 	if err != nil {
 		return nil, err
 	}
-	//创建通道
-	ch, err := conn.Channel()
+	//创建发布通道
+	publishCh, err := conn.Channel()
 	if err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
-	//声明交换机
-	//ch.ExchangeDeclare(
-	//	exchange,  // 交换机名
-	//	"fanout",  // 类型：广播模式
-	//	true,      // 持久化
-	//	false,     // 自动删除
-	//	false,     // 内部使用
-	//	false,     // 不等待
-	//	nil,       // 额外参数
-	//)
-	if err := ch.ExchangeDeclare(exchange, "fanout", true, false, false, false, nil); err != nil {
-		_ = ch.Close()
-		_ = conn.Close()
-		return nil, err
-	}
-	//声明队列
-	//	ch.QueueDeclare(
-	//		queue,   // 队列名
-	//		true,    // 持久化
-	//		false,   // 自动删除
-	//		false,   // 排他
-	//		false,   // 不等待
-	//		nil,     // 参数
-	//	)
-	if _, err := ch.QueueDeclare(queue, true, false, false, false, nil); err != nil {
-		_ = ch.Close()
+	//创建消费通道
+	consumeCh, err := conn.Channel()
+	if err != nil {
+		_ = publishCh.Close()
 		_ = conn.Close()
 		return nil, err
 	}
 
-	if err := ch.QueueBind(queue, "", exchange, false, nil); err != nil {
-		_ = ch.Close()
+	if err := publishCh.ExchangeDeclare(exchange, "fanout", true, false, false, false, nil); err != nil {
+		_ = publishCh.Close()
+		_ = consumeCh.Close()
+		_ = conn.Close()
+		return nil, err
+	}
+
+	if _, err := consumeCh.QueueDeclare(queue, true, false, false, false, nil); err != nil {
+		_ = publishCh.Close()
+		_ = consumeCh.Close()
+		_ = conn.Close()
+		return nil, err
+	}
+
+	if err := consumeCh.QueueBind(queue, "", exchange, false, nil); err != nil {
+		_ = publishCh.Close()
+		_ = consumeCh.Close()
 		_ = conn.Close()
 		return nil, err
 	}
 
 	return &RabbitMQ{
-		Conn:    conn,
-		Channel: ch,
+		Conn:           conn,
+		PublishChannel: publishCh,
+		ConsumeChannel: consumeCh,
 	}, nil
+}
+
+func (r *RabbitMQ) Close() error {
+	if r == nil {
+		return nil
+	}
+	if r.PublishChannel != nil {
+		_ = r.PublishChannel.Close()
+	}
+	if r.ConsumeChannel != nil {
+		_ = r.ConsumeChannel.Close()
+	}
+	if r.Conn != nil {
+		return r.Conn.Close()
+	}
+	return nil
 }

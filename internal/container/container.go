@@ -2,7 +2,9 @@ package container
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"os"
 
 	"go-admin/config"
 	"go-admin/internal/dao"
@@ -53,19 +55,22 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 	messageRepo := dao.NewGormMessageRepository(db)
 	jwtCfg := &dao.DefaultJWTConfig{Secret: jwtSecret}
 	groupRepo := dao.NewGormGroupRepository(db)
-	rabbit, err := core.NewRabbitMQ(cfg.RabbitMQ.URL, cfg.RabbitMQ.Exchange, cfg.RabbitMQ.Queue)
+	instanceID := resolveInstanceID()
+	instanceQueue := fmt.Sprintf("%s.%s", cfg.RabbitMQ.Queue, instanceID)
+	presenceService := service.NewPresenceService(redisClient, instanceID)
+	rabbit, err := core.NewRabbitMQ(cfg.RabbitMQ.URL, cfg.RabbitMQ.Exchange, instanceQueue)
 	if err != nil {
 		log.Fatalf("connect rabbitmq failed: %v", err)
 	}
-	groupMessagePublisher := service.NewRabbitGroupMessagePublisher(rabbit.Channel, cfg.RabbitMQ.Exchange)
+	groupMessagePublisher := service.NewRabbitGroupMessagePublisher(rabbit.PublishChannel, cfg.RabbitMQ.Exchange)
 
 	userService := service.NewUserService(userDB, userCache, jwtCfg, jwtSecret, ctx)
 	userHandler := handler.NewUserHandler(userService)
 	postService := service.NewPostService(postRepo, userCache, ctx)
 	postHandler := handler.NewPostHandler(postService)
-	wsService := service.NewWSService(messageRepo, groupRepo, groupMessagePublisher, userCache, ctx, jwtSecret)
+	wsService := service.NewWSService(messageRepo, groupRepo, groupMessagePublisher, presenceService, userCache, ctx, jwtSecret)
 	wsHandler := handler.NewWSHandler(wsService)
-	groupMessageConsumer := service.NewGroupMessageConsumer(rabbit.Channel, cfg.RabbitMQ.Queue, groupRepo, wsService.Hub())
+	groupMessageConsumer := service.NewGroupMessageConsumer(rabbit.ConsumeChannel, instanceQueue, groupRepo, wsService.Hub())
 	if err := groupMessageConsumer.Start(ctx); err != nil {
 		log.Fatalf("start group message consumer failed: %v", err)
 	}
@@ -102,4 +107,15 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 		GroupHandler:    groupHandler,
 		GroupService:    groupService,
 	}
+}
+
+func resolveInstanceID() string {
+	if val := os.Getenv("INSTANCE_ID"); val != "" {
+		return val
+	}
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		hostname = "unknown"
+	}
+	return fmt.Sprintf("%s-%d", hostname, os.Getpid())
 }

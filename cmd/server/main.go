@@ -40,13 +40,25 @@ func main() {
 	}
 	defer redisClient.Close()
 
-	if err := core.AutoMigrate(db); err != nil {
-		appLogger.Fatalf("auto migrate failed: %v", err)
-	}
+	// ======================
+	// 异步 AutoMigrate ✅ 标准 log 版本
+	// ======================
+	go func() {
+		appLogger.Print("🚀 开始异步执行数据库自动迁移...")
+		if err := core.AutoMigrate(db); err != nil {
+			// 子协程不能用 Fatal，否则整个程序挂掉
+			appLogger.Printf("❌ 自动迁移表结构失败: %v", err)
+			return
+		}
+		appLogger.Print("✅ 数据库自动迁移完成")
+	}()
+
 	appContainer := container.NewContainer(cfg, db, redisClient, appLogger)
 	appLogger.Println("DI container initialized")
 
 	r := router.InitDependencyInjectionRouter(appContainer)
+	appLogger.Print("🚀 服务启动成功，端口: %s", cfg.GetServerConfig().Port)
+
 	if err := r.Run(":" + cfg.GetServerConfig().Port); err != nil {
 		appLogger.Fatalf("start server failed: %v", err)
 	}

@@ -17,8 +17,8 @@ type WSService struct {
 	jwtSecret []byte
 }
 
-func NewWSService(messageRepo dao.MessageRepository, groupRepo dao.GroupRepository, publisher GroupMessagePublisher, cache dao.UserCache, ctx context.Context, jwtSecret []byte) *WSService {
-	hub := NewWSHub(messageRepo, groupRepo, publisher, cache, ctx)
+func NewWSService(messageRepo dao.MessageRepository, groupRepo dao.GroupRepository, publisher GroupMessagePublisher, presence *PresenceService, cache dao.UserCache, ctx context.Context, jwtSecret []byte) *WSService {
+	hub := NewWSHub(messageRepo, groupRepo, publisher, presence, cache, ctx)
 	go hub.Run()
 
 	return &WSService{
@@ -29,6 +29,10 @@ func NewWSService(messageRepo dao.MessageRepository, groupRepo dao.GroupReposito
 
 func (s *WSService) Hub() *WSHub {
 	return s.hub
+}
+
+func (s *WSService) Shutdown(ctx context.Context) {
+	s.hub.Shutdown(ctx)
 }
 
 func (s *WSService) AuthenticateToken(token string) (uint, error) {
