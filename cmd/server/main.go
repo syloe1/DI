@@ -14,6 +14,7 @@ func main() {
 	// ========== pprof 性能分析（后台独立运行）==========
 	go func() {
 		log.Println("✅ pprof 已启动: http://127.0.0.1:6060/debug/pprof")
+		http.HandleFunc("/metrics", core.MetricsHandler)
 		if err := http.ListenAndServe("127.0.0.1:6060", nil); err != nil {
 			log.Fatalf("pprof 启动失败: %v", err)
 		}

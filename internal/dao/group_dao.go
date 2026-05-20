@@ -48,5 +48,7 @@ type GroupRepository interface {
 	ApproveJoinRequest(req *model.ChatGroupJoinRequest, member *model.ChatGroupMember) error
 
 	CreateGroupMessage(message *model.ChatGroupMessage) error
+	CreateGroupMessageWithOutbox(message *model.ChatGroupMessage, outbox *model.MessageOutbox) error
+	CreateGroupMessageWithOutboxBuilder(message *model.ChatGroupMessage, build func(*model.ChatGroupMessage) (*model.MessageOutbox, error)) error
 	ListGroupMessages(groupID uint, offset int, limit int) ([]model.ChatGroupMessage, error)
 }

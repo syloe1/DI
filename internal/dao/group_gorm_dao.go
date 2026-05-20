@@ -1,6 +1,8 @@
 package dao
 
 import (
+	"fmt"
+
 	"go-admin/internal/domain/model"
 
 	"gorm.io/gorm"
@@ -272,6 +274,40 @@ func (r *GormGroupRepository) ApproveJoinRequest(req *model.ChatGroupJoinRequest
 }
 func (r *GormGroupRepository) CreateGroupMessage(message *model.ChatGroupMessage) error {
 	return r.db.Create(message).Error
+}
+
+func (r *GormGroupRepository) CreateGroupMessageWithOutbox(message *model.ChatGroupMessage, outbox *model.MessageOutbox) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(message).Error; err != nil {
+			return err
+		}
+		if outbox != nil {
+			outbox.AggregateID = fmt.Sprintf("%d", message.ID)
+			if err := tx.Create(outbox).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (r *GormGroupRepository) CreateGroupMessageWithOutboxBuilder(message *model.ChatGroupMessage, build func(*model.ChatGroupMessage) (*model.MessageOutbox, error)) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(message).Error; err != nil {
+			return err
+		}
+		outbox, err := build(message)
+		if err != nil {
+			return err
+		}
+		if outbox != nil {
+			outbox.AggregateID = fmt.Sprintf("%d", message.ID)
+			if err := tx.Create(outbox).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (r *GormGroupRepository) ListGroupMessages(groupID uint, offset int, limit int) ([]model.ChatGroupMessage, error) {

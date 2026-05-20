@@ -53,6 +53,7 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 	interactRepo := dao.NewGormInteractRepository(db)
 	socialRepo := dao.NewGormSocialRepository(db)
 	messageRepo := dao.NewGormMessageRepository(db)
+	outboxRepo := dao.NewGormOutboxRepository(db)
 	jwtCfg := &dao.DefaultJWTConfig{Secret: jwtSecret}
 	groupRepo := dao.NewGormGroupRepository(db)
 	instanceID := resolveInstanceID()
@@ -64,6 +65,8 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 		log.Fatalf("connect rabbitmq failed: %v", err)
 	}
 	groupMessagePublisher := service.NewRabbitGroupMessagePublisher(rabbit.PublishChannel, cfg.RabbitMQ.Exchange)
+	outboxService := service.NewOutboxService(outboxRepo, groupMessagePublisher)
+	outboxService.Start(ctx)
 
 	userService := service.NewUserService(userDB, userCache, jwtCfg, jwtSecret, ctx)
 	userHandler := handler.NewUserHandler(userService)

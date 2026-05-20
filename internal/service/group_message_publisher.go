@@ -31,6 +31,10 @@ func (p *RabbitGroupMessagePublisher) PublishGroupMessageCreated(ctx context.Con
 		return err
 	}
 
+	return p.PublishRaw(ctx, body)
+}
+
+func (p *RabbitGroupMessagePublisher) PublishRaw(ctx context.Context, body []byte) error {
 	return p.ch.PublishWithContext(
 		ctx,
 		p.exchange,

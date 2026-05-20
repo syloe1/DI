@@ -10,6 +10,7 @@ import (
 	"go-admin/internal/dao"
 	"go-admin/internal/domain/model"
 	"go-admin/internal/dto"
+	"go-admin/pkg/core"
 
 	"github.com/rabbitmq/amqp091-go"
 )
@@ -102,10 +103,12 @@ func (c *GroupMessageConsumer) workerLoop(ctx context.Context, tasks <-chan amqp
 			}
 			if err := c.handleDelivery(ctx, d); err != nil {
 				log.Printf("consume group message event failed: %v", err)
-				_ = d.Nack(false, true)
+				core.Metrics.ConsumerFailed.Add(1)
+				_ = d.Nack(false, false)
 				continue
 			}
 			_ = d.Ack(false)
+			core.Metrics.ConsumerSucceeded.Add(1)
 		}
 	}
 }
