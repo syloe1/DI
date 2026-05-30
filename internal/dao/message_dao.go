@@ -41,6 +41,7 @@ func (r *GormMessageRepository) CreateMessage(message *model.Message) error {
 // FindMessageByID 根据 ID 查询消息
 func (r *GormMessageRepository) FindMessageByID(id uint) (*model.Message, error) {
 	var message model.Message
+	//select * from messages where id = ? limit 1
 	if err := r.db.First(&message, id).Error; err != nil {
 		return nil, err
 	}
@@ -94,6 +95,14 @@ func (r *GormMessageRepository) GetMessages(userID uint, peerID uint, offset int
 
 // MarkMessagesAsRead 将对方发给当前用户的消息标记为已读
 func (r *GormMessageRepository) MarkMessagesAsRead(userID uint, peerID uint) error {
+	/*
+		UPDATE messages
+		SET is_read = true
+		WHERE
+		    from_uid = 对方    -- 对方发给我
+		AND to_uid = 我        -- 我是接收者
+		AND is_read = false;   -- 只更新未读的
+	*/
 	return r.db.Model(&model.Message{}).
 		Where("from_uid = ? AND to_uid = ? AND is_read = false", peerID, userID).
 		Update("is_read", true).Error
@@ -102,7 +111,13 @@ func (r *GormMessageRepository) MarkMessagesAsRead(userID uint, peerID uint) err
 // CountUnreadMessages 统计未读消息数量
 func (r *GormMessageRepository) CountUnreadMessages(userID uint, peerID uint) (int64, error) {
 	var count int64
-
+	/*
+	   SELECT COUNT(*) FROM messages
+	   WHERE
+	       from_uid = 对方
+	   AND to_uid = 我
+	   AND is_read = false;
+	*/
 	if err := r.db.Model(&model.Message{}).
 		Where("from_uid = ? AND to_uid = ? AND is_read = false", peerID, userID).
 		Count(&count).Error; err != nil {

@@ -51,6 +51,11 @@ func (r *GormInteractRepository) Transaction(fn func(repo InteractRepository) er
 
 func (r *GormInteractRepository) FindLike(userID uint, postID uint) (*model.Like, error) {
 	var like model.Like
+	/*
+		select * from likes
+		where user_id = ? and post_id = ?
+		limit 1
+	*/
 	if err := r.db.Where("user_id = ? AND post_id = ?", userID, postID).First(&like).Error; err != nil {
 		return nil, err
 	}
@@ -62,11 +67,13 @@ func (r *GormInteractRepository) CreateLike(like *model.Like) error {
 }
 
 func (r *GormInteractRepository) DeleteLike(like *model.Like) error {
+	//select * from dislikes where user_id = ? and post_id = ? limit 1
 	return r.db.Delete(like).Error
 }
 
 func (r *GormInteractRepository) FindDislike(userID uint, postID uint) (*model.Dislike, error) {
 	var dislike model.Dislike
+
 	if err := r.db.Where("user_id = ? AND post_id = ?", userID, postID).First(&dislike).Error; err != nil {
 		return nil, err
 	}
@@ -74,6 +81,7 @@ func (r *GormInteractRepository) FindDislike(userID uint, postID uint) (*model.D
 }
 
 func (r *GormInteractRepository) CreateDislike(dislike *model.Dislike) error {
+	//INSERT INTO likes (user_id, post_id) VALUES (?, ?);
 	return r.db.Create(dislike).Error
 }
 
@@ -83,6 +91,7 @@ func (r *GormInteractRepository) DeleteDislike(dislike *model.Dislike) error {
 
 func (r *GormInteractRepository) CountLikes(postID uint) (int64, error) {
 	var count int64
+	//select count(*) from likes where post_id = 5
 	if err := r.db.Model(&model.Like{}).Where("post_id = ?", postID).Count(&count).Error; err != nil {
 		return 0, err
 	}
@@ -115,6 +124,7 @@ func (r *GormInteractRepository) DeleteCollect(collect *model.Collect) error {
 
 func (r *GormInteractRepository) CountCollects(postID uint) (int64, error) {
 	var count int64
+	//SELECT COUNT(*) FROM collects WHERE post_id = ?
 	if err := r.db.Model(&model.Collect{}).Where("post_id = ?", postID).Count(&count).Error; err != nil {
 		return 0, err
 	}

@@ -65,7 +65,7 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 		log.Fatalf("connect rabbitmq failed: %v", err)
 	}
 	groupMessagePublisher := service.NewRabbitGroupMessagePublisher(rabbit.PublishChannel, cfg.RabbitMQ.Exchange)
-	outboxService := service.NewOutboxService(outboxRepo, groupMessagePublisher)
+	outboxService := service.NewOutboxService(outboxRepo, groupMessagePublisher, instanceID)
 	outboxService.Start(ctx)
 
 	userService := service.NewUserService(userDB, userCache, jwtCfg, jwtSecret, ctx)
@@ -74,7 +74,7 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 	postHandler := handler.NewPostHandler(postService)
 	wsService := service.NewWSService(messageRepo, groupRepo, groupMessagePublisher, presenceService, groupCacheService, userCache, ctx, jwtSecret)
 	wsHandler := handler.NewWSHandler(wsService)
-	groupMessageConsumer := service.NewGroupMessageConsumer(rabbit.ConsumeChannel, instanceQueue, groupRepo, groupCacheService, wsService.Hub())
+	groupMessageConsumer := service.NewGroupMessageConsumer(rabbit.ConsumeChannel, instanceQueue, groupRepo, groupCacheService, userCache, wsService.Hub())
 	if err := groupMessageConsumer.Start(ctx); err != nil {
 		log.Fatalf("start group message consumer failed: %v", err)
 	}

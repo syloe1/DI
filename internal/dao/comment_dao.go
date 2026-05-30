@@ -34,6 +34,7 @@ func (r *GormCommentRepository) Create(comment *model.Comment) error {
 
 func (r *GormCommentRepository) FindByID(id string) (*model.Comment, error) {
 	var comment model.Comment
+	//select * from comments where id = ? limti 1
 	if err := r.db.First(&comment, id).Error; err != nil {
 		return nil, err
 	}
@@ -52,6 +53,7 @@ func (r *GormCommentRepository) FindByPostID(postID string) ([]model.Comment, er
 
 func (r *GormCommentRepository) FindByUserID(userID uint) ([]model.Comment, error) {
 	var comments []model.Comment
+	//seleect * from comments where user_id = ?
 	if err := r.db.Where("user_id = ?", userID).Find(&comments).Error; err != nil {
 		return nil, err
 	}
@@ -59,6 +61,11 @@ func (r *GormCommentRepository) FindByUserID(userID uint) ([]model.Comment, erro
 }
 
 func (r *GormCommentRepository) Update(comment *model.Comment, updates map[string]interface{}) error {
+	/*
+		update comments
+		set content = ?, status = ?
+		where id = >
+	*/
 	return r.db.Model(comment).Updates(updates).Error
 }
 
@@ -68,6 +75,7 @@ func (r *GormCommentRepository) Delete(comment *model.Comment) error {
 
 func (r *GormCommentRepository) FindUserByID(userID uint) (*model.User, error) {
 	var user model.User
+	//select * from users where id = ? limit 1
 	if err := r.db.First(&user, userID).Error; err != nil {
 		return nil, err
 	}
@@ -76,6 +84,7 @@ func (r *GormCommentRepository) FindUserByID(userID uint) (*model.User, error) {
 
 func (r *GormCommentRepository) FindPostByID(postID uint) (*model.Post, error) {
 	var post model.Post
+	//select * from posts where id = ? limit 1
 	if err := r.db.First(&post, postID).Error; err != nil {
 		return nil, err
 	}

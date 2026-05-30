@@ -207,6 +207,24 @@ func (h *UserHandler) BatchGetUserRoles(c *gin.Context) {
 	}
 	core.Success(c, data)
 }
+func (h *UserHandler) BatchPutUserRoles(c *gin.Context) {
+	var req dto.BatchPutUserRolesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		core.FailByError(c, core.ParseBindError(err))
+		return
+	}
+
+	currentUserID := c.GetUint("userID")
+	currentRole := c.GetString("role")
+
+	err := h.svc.BatchPutUserRoles(currentUserID, currentRole, req.IDs, req.Role)
+	if err != nil {
+		core.FailByError(c, err)
+		return
+	}
+
+	core.Success(c, nil)
+}
 
 func parseUintParam(c *gin.Context, key string) (uint, bool) {
 	id64, err := strconv.ParseUint(c.Param(key), 10, 64)

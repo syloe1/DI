@@ -29,3 +29,7 @@ type ChangePasswordRequest struct {
 type BatchGetUserRolesRequest struct {
 	IDs []uint `json:"ids" binding:"required,min=1,max=100,dive,min=1"`
 }
+type BatchPutUserRolesRequest struct {
+	IDs  []uint `json:"ids" binding:"required,min=1,max=100,dive,min=1"`
+	Role string `json:"role" binding:"required,oneof=superadmin admin user"`
+}

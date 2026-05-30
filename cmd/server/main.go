@@ -1,30 +1,31 @@
 package main
 
 import (
+	"log"
+	"net/http"
+	_ "net/http/pprof"
+
 	"go-admin/config"
 	"go-admin/internal/container"
 	"go-admin/internal/router"
 	"go-admin/pkg/core"
-	"log"
-	"net/http"
-	_ "net/http/pprof" // 只需要匿名导入
 )
 
 func main() {
-	// ========== pprof 性能分析（后台独立运行）==========
 	go func() {
-		log.Println("✅ pprof 已启动: http://127.0.0.1:6060/debug/pprof")
+		log.Println("pprof started: http://127.0.0.1:6060/debug/pprof")
 		http.HandleFunc("/metrics", core.MetricsHandler)
 		if err := http.ListenAndServe("127.0.0.1:6060", nil); err != nil {
-			log.Fatalf("pprof 启动失败: %v", err)
+			log.Fatalf("pprof start failed: %v", err)
 		}
 	}()
-	appLogger := core.NewLogger()
 
+	appLogger := core.NewLogger()
+	//注册自定义参数校验器
 	if err := core.RegisterCustomValidators(); err != nil {
 		appLogger.Fatalf("register custom validators failed: %v", err)
 	}
-
+	// 加载配置文件
 	cfg, err := config.Load("config/config.yaml")
 	if err != nil {
 		appLogger.Fatalf("load config failed: %v", err)
@@ -39,26 +40,22 @@ func main() {
 	if err != nil {
 		appLogger.Fatalf("init redis failed: %v", err)
 	}
-	defer redisClient.Close()
-
-	// ======================
-	// 异步 AutoMigrate ✅ 标准 log 版本
-	// ======================
+	defer func() { _ = redisClient.Close() }()
+	//异步数据库迁移
 	go func() {
-		appLogger.Print("🚀 开始异步执行数据库自动迁移...")
+		appLogger.Print("start database auto migration")
 		if err := core.AutoMigrate(db); err != nil {
-			// 子协程不能用 Fatal，否则整个程序挂掉
-			appLogger.Printf("❌ 自动迁移表结构失败: %v", err)
+			appLogger.Printf("database auto migration failed: %v", err)
 			return
 		}
-		appLogger.Print("✅ 数据库自动迁移完成")
+		appLogger.Print("database auto migration completed")
 	}()
-
+	//依赖注入容器 DI Container
 	appContainer := container.NewContainer(cfg, db, redisClient, appLogger)
 	appLogger.Println("DI container initialized")
-
+	//初始化路由
 	r := router.InitDependencyInjectionRouter(appContainer)
-	appLogger.Print("🚀 服务启动成功，端口: %s", cfg.GetServerConfig().Port)
+	appLogger.Printf("server started, port: %s", cfg.GetServerConfig().Port)
 
 	if err := r.Run(":" + cfg.GetServerConfig().Port); err != nil {
 		appLogger.Fatalf("start server failed: %v", err)

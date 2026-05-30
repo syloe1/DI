@@ -403,7 +403,13 @@ func (s *UserService) GetOnlineUsers() (map[string]interface{}, error) {
 		"list":  users,
 	}, nil
 }
-
+func (s *UserService) GetUserRole(id uint) (string, error) {
+	user, err := s.db.FindByID(id)
+	if err != nil {
+		return "", core.NewBizError(http.StatusNotFound, "user not found")
+	}
+	return user.Role, nil
+}
 func (s *UserService) BatchGetUserRoles(ids []uint) (map[uint]string, error) {
 	if len(ids) == 0 {
 		return nil, core.NewBizError(http.StatusBadRequest, "ids cannot be empty")
@@ -424,6 +430,70 @@ func (s *UserService) BatchGetUserRoles(ids []uint) (map[uint]string, error) {
 	return roleMap, nil
 }
 
+func (s *UserService) BatchPutUserRoles(currentUserID uint, currentRole string, ids []uint, role string) error {
+	// 基础参数校验
+	if len(ids) == 0 {
+		return core.NewBizError(http.StatusBadRequest, "ids cannot be empty")
+	}
+	if len(ids) > 100 {
+		return core.NewBizError(http.StatusBadRequest, "at most 100 ids per request")
+	}
+	if currentUserID == 0 {
+		return core.NewBizError(http.StatusUnauthorized, "请先登录")
+	}
+
+	// 1. 角色权限校验
+	switch currentRole {
+	case model.RoleUser:
+		return core.NewBizError(http.StatusForbidden, "无权限修改角色")
+
+	case model.RoleAdmin:
+		// 管理员禁止设置超级管理员
+		if role == model.RoleSuperAdmin {
+			return core.NewBizError(http.StatusForbidden, "管理员无法设置超级管理员")
+		}
+		// 校验目标角色合法
+		if role != model.RoleUser && role != model.RoleAdmin {
+			return core.NewBizError(http.StatusBadRequest, "无效角色类型")
+		}
+
+	case model.RoleSuperAdmin:
+		// 超管允许所有合法角色
+		if role != model.RoleUser && role != model.RoleAdmin && role != model.RoleSuperAdmin {
+			return core.NewBizError(http.StatusBadRequest, "无效角色类型")
+		}
+
+	default:
+		return core.NewBizError(http.StatusBadRequest, "当前账号角色异常")
+	}
+
+	// 2. 禁止修改自己的角色
+	for _, id := range ids {
+		if id == currentUserID {
+			return core.NewBizError(http.StatusForbidden, "不允许修改自身角色")
+		}
+	}
+
+	// 3. 管理员额外防护：不能修改已存在的超级管理员账号
+	if currentRole == model.RoleAdmin {
+		users, err := s.db.FindByIDs(ids)
+		if err != nil {
+			return core.NewBizError(http.StatusInternalServerError, "查询用户失败")
+		}
+		for _, u := range users {
+			if u.Role == model.RoleSuperAdmin {
+				return core.NewBizError(http.StatusForbidden, "无权修改超级管理员账号")
+			}
+		}
+	}
+
+	// 执行批量更新
+	err := s.db.UpdateRoleByIDs(ids, role)
+	if err != nil {
+		return core.NewBizError(http.StatusInternalServerError, "更新角色失败")
+	}
+	return nil
+}
 func (s *UserService) ensureUsernameAvailable(username string) error {
 	count, err := s.db.CountByUsername(username)
 	if err != nil {

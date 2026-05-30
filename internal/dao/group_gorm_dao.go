@@ -38,6 +38,9 @@ func (r *GormGroupRepository) CreateGroup(group *model.ChatGroup, members []mode
 }
 func (r *GormGroupRepository) FindGroupByID(groupID uint) (*model.ChatGroup, error) {
 	var group model.ChatGroup
+	/*
+		select * from chat_groups where id = ? limit 1
+	*/
 	if err := r.db.First(&group, groupID).Error; err != nil {
 		return nil, err
 	}
@@ -50,6 +53,11 @@ func (r *GormGroupRepository) UpdateGroup(group *model.ChatGroup) error {
 
 func (r *GormGroupRepository) FindMember(groupID, userID uint) (*model.ChatGroupMember, error) {
 	var member model.ChatGroupMember
+	/*
+		select * from chat_group_members
+		where group_id = ? and user_id = ?
+		limit 1
+	*/
 	if err := r.db.Where("group_id = ? AND user_id = ?", groupID, userID).
 		First(&member).Error; err != nil {
 		return nil, err
@@ -59,6 +67,13 @@ func (r *GormGroupRepository) FindMember(groupID, userID uint) (*model.ChatGroup
 
 func (r *GormGroupRepository) ListMembers(groupID uint) ([]model.ChatGroupMember, error) {
 	var members []model.ChatGroupMember
+	/*
+		select * from chat_group_membres
+		where group_id = ?
+		order by
+		role asc
+		joined_at asc
+	*/
 	if err := r.db.Where("group_id = ?", groupID).
 		Order("role ASC, joined_at ASC").
 		Find(&members).Error; err != nil {
@@ -69,6 +84,10 @@ func (r *GormGroupRepository) ListMembers(groupID uint) ([]model.ChatGroupMember
 
 func (r *GormGroupRepository) ListActiveMembers(groupID uint) ([]model.ChatGroupMember, error) {
 	var members []model.ChatGroupMember
+	/*
+		select * from chat_group_members
+		where group_id = ? and status = 1
+	*/
 	if err := r.db.Where("group_id = ? AND status = ?", groupID, model.ChatGroupMemberStatusActive).
 		Find(&members).Error; err != nil {
 		return nil, err
@@ -100,6 +119,13 @@ func (r *GormGroupRepository) ListGroupsByUserID(userID uint) ([]GroupWithMember
 
 func (r *GormGroupRepository) CountAdmins(groupID uint) (int64, error) {
 	var count int64
+	/*
+		select count(*)
+		from chat_group_members
+		where group_id = ?
+		and role = 2
+		and status = 1
+	*/
 	if err := r.db.Model(&model.ChatGroupMember{}).
 		Where("group_id = ? AND role = ? AND status = ?", groupID, model.ChatGroupMemberRoleAdmin, model.ChatGroupMemberStatusActive).
 		Count(&count).Error; err != nil {
@@ -127,15 +153,26 @@ func (r *GormGroupRepository) UpsertMember(member *model.ChatGroupMember) error 
 }
 
 func (r *GormGroupRepository) UpdateMember(member *model.ChatGroupMember) error {
+	/*
+		update chat_group_members
+		set ...
+		where id = ?
+	*/
 	return r.db.Save(member).Error
 }
 
 func (r *GormGroupRepository) CreateInvitation(invitation *model.ChatGroupInvitation) error {
+	/*
+		Insert into chat_group invitations () values ()
+	*/
 	return r.db.Create(invitation).Error
 }
 
 func (r *GormGroupRepository) FindInvitationByID(invitationID uint) (*model.ChatGroupInvitation, error) {
 	var invitation model.ChatGroupInvitation
+	/*
+		select * from chat_group_invitations where id = ? limit 1
+	*/
 	if err := r.db.First(&invitation, invitationID).Error; err != nil {
 		return nil, err
 	}
@@ -144,6 +181,11 @@ func (r *GormGroupRepository) FindInvitationByID(invitationID uint) (*model.Chat
 
 func (r *GormGroupRepository) FindPendingInvitation(groupID, inviteeID uint) (*model.ChatGroupInvitation, error) {
 	var invitation model.ChatGroupInvitation
+	/*
+		select * from chat_group_invitations
+		where group_id = ? and invitee_uid = ? and status = 0
+		limit 1
+	*/
 	if err := r.db.Where("group_id = ? AND invitee_uid = ? AND status = ?", groupID, inviteeID, model.ChatGroupInvitationStatusPending).
 		First(&invitation).Error; err != nil {
 		return nil, err
@@ -161,6 +203,10 @@ func (r *GormGroupRepository) CreateJoinRequest(req *model.ChatGroupJoinRequest)
 
 func (r *GormGroupRepository) FindJoinRequestByID(requestID uint) (*model.ChatGroupJoinRequest, error) {
 	var req model.ChatGroupJoinRequest
+	/*
+		select * from chat_group_join_requests
+		where id = ? limit 1
+	*/
 	if err := r.db.First(&req, requestID).Error; err != nil {
 		return nil, err
 	}
@@ -169,6 +215,11 @@ func (r *GormGroupRepository) FindJoinRequestByID(requestID uint) (*model.ChatGr
 
 func (r *GormGroupRepository) FindPendingJoinRequest(groupID, userID uint) (*model.ChatGroupJoinRequest, error) {
 	var req model.ChatGroupJoinRequest
+	/*
+		select * from chat_group_join_requests
+		where group_id = ? and user_id = ? and status = 0 --pending
+		limit 1
+	*/
 	if err := r.db.Where("group_id = ? AND user_id = ? AND status = ?", groupID, userID, model.ChatGroupJoinRequestStatusPending).
 		First(&req).Error; err != nil {
 		return nil, err
@@ -178,6 +229,12 @@ func (r *GormGroupRepository) FindPendingJoinRequest(groupID, userID uint) (*mod
 
 func (r *GormGroupRepository) FindLatestRejectedJoinRequest(groupID, userID uint) (*model.ChatGroupJoinRequest, error) {
 	var req model.ChatGroupJoinRequest
+	/*
+		select * from chat_group_join)request s
+		where group_id = ? and user_id = ? and status = 2
+		order by created_at DESC
+		limit 1
+	*/
 	if err := r.db.Where("group_id = ? AND user_id = ? AND status = ?", groupID, userID, model.ChatGroupJoinRequestStatusRejected).
 		Order("created_at DESC").
 		First(&req).Error; err != nil {
@@ -188,6 +245,11 @@ func (r *GormGroupRepository) FindLatestRejectedJoinRequest(groupID, userID uint
 
 func (r *GormGroupRepository) ListJoinRequestsByGroupID(groupID uint) ([]model.ChatGroupJoinRequest, error) {
 	var requests []model.ChatGroupJoinRequest
+	/*
+		select * from chat_group_join_request
+		whre group_id = ?
+		order by created_at DESC
+	*/
 	if err := r.db.Where("group_id = ?", groupID).
 		Order("created_at DESC").
 		Find(&requests).Error; err != nil {
@@ -202,6 +264,10 @@ func (r *GormGroupRepository) UpdateJoinRequest(req *model.ChatGroupJoinRequest)
 
 func (r *GormGroupRepository) FindUserByID(userID uint) (*model.User, error) {
 	var user model.User
+	/*
+		select * from users
+		where id = ? limit  1
+	*/
 	if err := r.db.First(&user, userID).Error; err != nil {
 		return nil, err
 	}
@@ -277,6 +343,11 @@ func (r *GormGroupRepository) CreateGroupMessage(message *model.ChatGroupMessage
 }
 
 func (r *GormGroupRepository) CreateGroupMessageWithOutbox(message *model.ChatGroupMessage, outbox *model.MessageOutbox) error {
+	/*
+		insert into chat_group_messages
+
+		insert into message_outboxes
+	*/
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(message).Error; err != nil {
 			return err
@@ -312,6 +383,12 @@ func (r *GormGroupRepository) CreateGroupMessageWithOutboxBuilder(message *model
 
 func (r *GormGroupRepository) ListGroupMessages(groupID uint, offset int, limit int) ([]model.ChatGroupMessage, error) {
 	var messages []model.ChatGroupMessage
+	/*
+		select * from chat_group_messages
+		where group_id = ?
+		order by created_at DESC
+		Limit ? offset ?
+	*/
 	err := r.db.Where("group_id = ?", groupID).
 		Order("created_at DESC").
 		Offset(offset).

@@ -30,11 +30,13 @@ func NewGormPostRepository(db *gorm.DB) *GormPostRepository {
 }
 
 func (r *GormPostRepository) Create(post *model.Post) error {
+	//insert into posts () values ()
 	return r.db.Create(post).Error
 }
 
 func (r *GormPostRepository) FindByID(id string) (*model.Post, error) {
 	var post model.Post
+	//select * from posts where id = ? limit 1
 	if err := r.db.Preload("User").First(&post, id).Error; err != nil {
 		return nil, err
 	}
@@ -43,6 +45,7 @@ func (r *GormPostRepository) FindByID(id string) (*model.Post, error) {
 
 func (r *GormPostRepository) FindByIDs(ids []uint) ([]model.Post, error) {
 	var posts []model.Post
+	//select * from posts where id in (????)
 	if len(ids) == 0 {
 		return posts, nil
 	}
@@ -51,6 +54,11 @@ func (r *GormPostRepository) FindByIDs(ids []uint) ([]model.Post, error) {
 }
 
 func (r *GormPostRepository) FindPublicByTopic(topic string) ([]model.Post, error) {
+	/*
+		SELECT * FROM posts
+		WHERE topic = ? AND status = 已发布
+		ORDER BY created_at DESC;
+	*/
 	return r.FindPublicByTopicWithStrategy(topic, TimeSortStrategy{})
 }
 
@@ -69,7 +77,17 @@ func (r *GormPostRepository) FindPublicPage(topic string, page int, pageSize int
 		posts []model.Post
 		total int64
 	)
+	/*
+	   -- 1. 查询总数
+	   SELECT COUNT(*) FROM posts
+	   WHERE topic = ? AND status = 已发布;
 
+	   -- 2. 查询当前页数据
+	   SELECT * FROM posts
+	   WHERE topic = ? AND status = 已发布
+	   ORDER BY ...
+	   LIMIT ? OFFSET ?;
+	*/
 	baseQuery := r.db.Model(&model.Post{}).Scopes(WithPublishedPost(), WithTopic(topic))
 	if err := baseQuery.Count(&total).Error; err != nil {
 		return nil, 0, err

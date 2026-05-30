@@ -76,8 +76,10 @@ func (s *ChatService) HandleGroupMessage(ctx context.Context, req GroupMessageRe
 		SenderUID: uid,
 		Content:   content,
 	}
+	//MQ消息体
 	event := dto.GroupMessageCreatedEvent{
 		Type:      "group_message_created",
+		RequestID: req.RequestID,
 		GroupID:   groupID,
 		FromUID:   uid,
 		Content:   content,

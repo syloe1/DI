@@ -47,6 +47,10 @@ func (r *GormSocialRepository) Transaction(fn func(repo SocialRepository) error)
 
 func (r *GormSocialRepository) FindFollowRelation(fromUID uint, toUID uint) (*model.UserRelation, error) {
 	var relation model.UserRelation
+	/*
+		SELECT * FROM user_relations
+		WHERE from_uid = ? AND to_uid = ? AND type = 'follow' LIMIT 1;
+	*/
 	if err := r.db.Where("from_uid = ? AND to_uid = ? AND type = 'follow'", fromUID, toUID).
 		First(&relation).Error; err != nil {
 		return nil, err
@@ -59,11 +63,18 @@ func (r *GormSocialRepository) CreateFollowRelation(relation *model.UserRelation
 }
 
 func (r *GormSocialRepository) DeleteFollowRelation(relation *model.UserRelation) error {
+	/*
+		UPDATE user_relations SET deleted_at = NOW() WHERE id = ?;
+	*/
 	return r.db.Delete(relation).Error
 }
 
 func (r *GormSocialRepository) CountFollowers(userID uint) (int64, error) {
 	var count int64
+	/*
+		SELECT COUNT(*) FROM user_relations
+		WHERE to_uid = ? AND type = 'follow';
+	*/
 	if err := r.db.Model(&model.UserRelation{}).
 		Where("to_uid = ? AND type = 'follow'", userID).Count(&count).Error; err != nil {
 		return 0, err
@@ -73,6 +84,10 @@ func (r *GormSocialRepository) CountFollowers(userID uint) (int64, error) {
 
 func (r *GormSocialRepository) CountFollowing(userID uint) (int64, error) {
 	var count int64
+	/*
+		SELECT COUNT(*) FROM user_relations
+		WHERE from_uid = ? AND type = 'follow';
+	*/
 	if err := r.db.Model(&model.UserRelation{}).
 		Where("from_uid = ? AND type = 'follow'", userID).Count(&count).Error; err != nil {
 		return 0, err
@@ -81,6 +96,7 @@ func (r *GormSocialRepository) CountFollowing(userID uint) (int64, error) {
 }
 
 func (r *GormSocialRepository) GetFollowers(userID uint) ([]model.UserRelation, error) {
+	//SELECT * FROM user_relations WHERE to_uid = ? AND type = 'follow';
 	var relations []model.UserRelation
 	if err := r.db.Where("to_uid = ? AND type = 'follow'", userID).
 		Find(&relations).Error; err != nil {
