@@ -1,0 +1,56 @@
+groups:
+  - name: go-admin-chat
+    rules:
+      - alert: ChatOutboxBacklogHigh
+        expr: chat_outbox_pending > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "chat outbox backlog is high"
+          description: "message_outboxes pending count has been above 100 for 5 minutes."
+
+      - alert: ChatOutboxPublishFailures
+        expr: increase(chat_outbox_publish_failed_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "chat outbox publish failures detected"
+          description: "outbox publish failures increased in the last 5 minutes."
+
+      - alert: ChatConsumerFailures
+        expr: increase(chat_consumer_failed_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "chat consumer failures detected"
+          description: "group message consumer failures increased in the last 5 minutes. Check DLQ."
+
+      - alert: ChatSlowClientDropsHigh
+        expr: increase(chat_push_dropped_slow_total[5m]) > 20
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "slow websocket clients are being dropped"
+          description: "more than 20 slow client drops happened in the last 5 minutes."
+
+      - alert: ChatOnlineConnectionsDropped
+        expr: chat_online_connections < 1
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "chat online connections dropped"
+          description: "online connections have stayed below 1 for 3 minutes."
+
+      - alert: ChatOutboxFailedRows
+        expr: chat_outbox_failed > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "failed outbox rows exist"
+          description: "message_outboxes contains failed rows that need manual recovery."

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,26 +18,32 @@ import (
 )
 
 const (
-	defaultGroupMessageConsumerWorkers = 8
-	defaultPushShardWorkers            = 16
+	defaultGroupMessageConsumerWorkers = 8   // MQ 消费协程数
+	defaultPushShardWorkers            = 16  // 消息推送协程数
+
+	groupMessageProcessedKeyPrefix = "group_message_processed:" // 幂等Key前缀
+	groupMessageProcessingTTL      = 5 * time.Minute             // 处理中状态过期时间
+	groupMessageProcessedTTL       = 7 * 24 * time.Hour          // 已完成状态过期时间
 )
 
 type GroupMessageConsumer struct {
-	ch          *amqp091.Channel
-	queue       string
-	groupRepo   dao.GroupRepository
-	groupCache  *GroupCacheService
-	hub         *WSHub
-	workers     int
-	pushWorkers int
+	ch          *amqp091.Channel   // RabbitMQ 信道
+	queue       string             // 消费队列名
+	groupRepo   dao.GroupRepository// 群数据库DAO
+	groupCache  *GroupCacheService // 群成员/在线缓存服务（前面整套分片缓存）
+	cache       dao.UserCache      // Redis 缓存客户端（用于幂等去重）
+	hub         *WSHub             // WebSocket 连接管理器，负责推送消息
+	workers     int                // MQ 消费协程数
+	pushWorkers int                // 分片推送协程数
 }
 
-func NewGroupMessageConsumer(ch *amqp091.Channel, queue string, groupRepo dao.GroupRepository, groupCache *GroupCacheService, hub *WSHub) *GroupMessageConsumer {
+func NewGroupMessageConsumer(ch *amqp091.Channel, queue string, groupRepo dao.GroupRepository, groupCache *GroupCacheService, cache dao.UserCache, hub *WSHub) *GroupMessageConsumer {
 	return &GroupMessageConsumer{
 		ch:          ch,
 		queue:       queue,
 		groupRepo:   groupRepo,
 		groupCache:  groupCache,
+		cache:       cache,
 		hub:         hub,
 		workers:     defaultGroupMessageConsumerWorkers,
 		pushWorkers: defaultPushShardWorkers,
@@ -50,12 +58,12 @@ func (c *GroupMessageConsumer) Start(ctx context.Context) error {
 	if err := c.ch.Qos(c.workers*2, 0, false); err != nil {
 		return err
 	}
-
+	//订阅队列
 	deliveries, err := c.ch.Consume(c.queue, "", false, false, false, false, nil)
 	if err != nil {
 		return err
 	}
-
+	//缓冲
 	tasks := make(chan amqp091.Delivery, c.workers*2)
 	var wg sync.WaitGroup
 
@@ -66,7 +74,7 @@ func (c *GroupMessageConsumer) Start(ctx context.Context) error {
 			c.workerLoop(ctx, tasks)
 		}()
 	}
-
+	//消息转发协程
 	go func() {
 		defer close(tasks)
 		defer wg.Wait()
@@ -81,6 +89,7 @@ func (c *GroupMessageConsumer) Start(ctx context.Context) error {
 				}
 				select {
 				case <-ctx.Done():
+					//重回队列
 					_ = d.Nack(false, true)
 					return
 				case tasks <- d:
@@ -107,13 +116,13 @@ func (c *GroupMessageConsumer) workerLoop(ctx context.Context, tasks <-chan amqp
 				_ = d.Nack(false, false)
 				continue
 			}
+			//手动确认
 			_ = d.Ack(false)
 			core.Metrics.ConsumerSucceeded.Add(1)
 		}
 	}
 }
 
-// 消费MQ队列里的群消息创建事件 + 推送在线用户
 func (c *GroupMessageConsumer) handleDelivery(ctx context.Context, d amqp091.Delivery) error {
 	var event dto.GroupMessageCreatedEvent
 	if err := json.Unmarshal(d.Body, &event); err != nil {
@@ -122,15 +131,31 @@ func (c *GroupMessageConsumer) handleDelivery(ctx context.Context, d amqp091.Del
 	if event.Type != "group_message_created" {
 		return nil
 	}
-	//查询群消息，检测群正常
-	group, err := c.groupRepo.FindGroupByID(event.GroupID)
+	dedupeKey := groupMessageDedupeKey(event.MessageID, event.RequestID)
+	if dedupeKey == "" {
+		return nil
+	}
+    //幂等机制
+	processed, err := c.markProcessing(ctx, dedupeKey)
 	if err != nil {
 		return err
 	}
-	if group.Status != model.ChatGroupStatusNormal {
+	//如果正在消费
+	if processed {
 		return nil
 	}
-	//组装消息
+
+	group, err := c.groupRepo.FindGroupByID(event.GroupID)
+	if err != nil {
+		_ = c.clearProcessing(ctx, dedupeKey)
+		return err
+	}
+	if group.Status != model.ChatGroupStatusNormal {
+		//不再推送消息
+		_ = c.markDone(ctx, dedupeKey)
+		return nil
+	}
+
 	out, err := json.Marshal(dto.WSOutboundMessage{
 		Type:      "group_message",
 		MessageID: event.MessageID,
@@ -140,27 +165,87 @@ func (c *GroupMessageConsumer) handleDelivery(ctx context.Context, d amqp091.Del
 		Time:      event.CreatedAt.Format(time.RFC3339),
 	})
 	if err != nil {
+		_ = c.clearProcessing(ctx, dedupeKey)
 		return err
 	}
-	//获取群内 [活跃 + 在线]的用户切片
+
 	shards, err := c.targetOnlineShards(ctx, event.GroupID)
 	if err != nil {
+		_ = c.clearProcessing(ctx, dedupeKey)
 		return err
 	}
+	//分片并发推送
 	c.pushShards(ctx, shards, out)
+	if err := c.markDone(ctx, dedupeKey); err != nil {
+		log.Printf("mark consumer event done failed: %v", err)
+	}
+
 	return nil
+}
+
+func (c *GroupMessageConsumer) markProcessing(ctx context.Context, dedupeKey string) (bool, error) {
+	if c.cache == nil || dedupeKey == "" {
+		return false, nil
+	}
+
+	key := groupMessageProcessedKey(dedupeKey)
+	ok, err := c.cache.SetNX(ctx, key, "processing", groupMessageProcessingTTL)
+	if err != nil {
+		return false, err
+	}
+	if ok {
+		return false, nil
+	}
+	// 查询当前状态，判断是否已处理 / 处理中
+	value, err := c.cache.Get(ctx, key)
+	if err != nil {
+		return false, err
+	}
+
+	return value == "done" || value == "processing", nil
+}
+
+func (c *GroupMessageConsumer) markDone(ctx context.Context, dedupeKey string) error {
+	if c.cache == nil || dedupeKey == "" {
+		return nil
+	}
+
+	return c.cache.Set(ctx, groupMessageProcessedKey(dedupeKey), "done", groupMessageProcessedTTL)
+}
+
+func (c *GroupMessageConsumer) clearProcessing(ctx context.Context, dedupeKey string) error {
+	if c.cache == nil || dedupeKey == "" {
+		return nil
+	}
+
+	return c.cache.Del(ctx, groupMessageProcessedKey(dedupeKey))
+}
+
+func groupMessageDedupeKey(messageID uint, requestID string) string {
+	if messageID > 0 {
+		return strconv.FormatUint(uint64(messageID), 10)
+	}
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return ""
+	}
+	return "req:" + requestID
+}
+
+func groupMessageProcessedKey(dedupeKey string) string {
+	return groupMessageProcessedKeyPrefix + dedupeKey
 }
 
 func (c *GroupMessageConsumer) targetOnlineShards(ctx context.Context, groupID uint) ([][]uint, error) {
 	if c.groupCache != nil {
 		return c.groupCache.ActiveOnlineMemberIDsByShard(ctx, groupID)
 	}
-	//本地计算
+
 	members, err := c.groupRepo.ListActiveMembers(groupID)
 	if err != nil {
 		return nil, err
 	}
-	//全部放一个分片
+	//单个分片
 	shards := make([][]uint, 1)
 	localUsers := c.hub.GetOnlineUserSet()
 	for _, member := range members {
@@ -171,7 +256,6 @@ func (c *GroupMessageConsumer) targetOnlineShards(ctx context.Context, groupID u
 	return shards, nil
 }
 
-// 把群消息按16分片的在线用户， 用协程池推送给所有人
 func (c *GroupMessageConsumer) pushShards(ctx context.Context, shards [][]uint, payload []byte) {
 	if c.pushWorkers <= 0 {
 		c.pushWorkers = defaultPushShardWorkers
@@ -179,14 +263,12 @@ func (c *GroupMessageConsumer) pushShards(ctx context.Context, shards [][]uint, 
 
 	tasks := make(chan []uint, len(shards))
 	var wg sync.WaitGroup
-	//16个消费者协程
+
 	for i := 0; i < c.pushWorkers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			//不断从tasks通道按任务
 			for users := range tasks {
-				//遍历分片的用户
 				for _, userID := range users {
 					select {
 					case <-ctx.Done():

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"go-admin/internal/dao"
+	"go-admin/internal/domain/model"
 	"go-admin/pkg/core"
 )
 
@@ -16,16 +17,20 @@ type OutboxPublisher interface {
 type OutboxService struct {
 	repo      dao.OutboxRepository
 	publisher OutboxPublisher
+	claimer   string  //抢占标识
 	interval  time.Duration
 	batchSize int
+	claimTTL  time.Duration
 }
 
-func NewOutboxService(repo dao.OutboxRepository, publisher OutboxPublisher) *OutboxService {
+func NewOutboxService(repo dao.OutboxRepository, publisher OutboxPublisher, claimer string) *OutboxService {
 	return &OutboxService{
 		repo:      repo,
 		publisher: publisher,
+		claimer:   claimer,
 		interval:  2 * time.Second,
 		batchSize: 100,
+		claimTTL:  30 * time.Second,
 	}
 }
 
@@ -46,7 +51,8 @@ func (s *OutboxService) Start(ctx context.Context) {
 
 func (s *OutboxService) publishDue(ctx context.Context) {
 	now := time.Now()
-	items, err := s.repo.ListDue(s.batchSize, now)
+	s.refreshMetrics()
+	items, err := s.repo.ClaimDue(s.batchSize, now, s.claimer, s.claimTTL)
 	if err != nil {
 		log.Printf("list outbox failed: %v", err)
 		return
@@ -60,11 +66,30 @@ func (s *OutboxService) publishDue(ctx context.Context) {
 			core.Metrics.OutboxPublishFailed.Add(1)
 			continue
 		}
+		//db标记为已投递， 
 		_ = s.repo.MarkPublished(item.ID, time.Now())
 		core.Metrics.OutboxPublished.Add(1)
 	}
+	s.refreshMetrics()
 }
 
+func (s *OutboxService) refreshMetrics() {
+	pending, err := s.repo.CountByStatus(model.MessageOutboxStatusPending)
+	if err == nil {
+		core.Metrics.OutboxPending.Store(pending)
+	}
+
+	processing, err := s.repo.CountByStatus(model.MessageOutboxStatusProcessing)
+	if err == nil {
+		core.Metrics.OutboxProcessing.Store(processing)
+	}
+
+	failed, err := s.repo.CountByStatus(model.MessageOutboxStatusFailed)
+	if err == nil {
+		core.Metrics.OutboxFailed.Store(failed)
+	}
+}
+//规避重试风暴 指数时间上升
 func backoffDuration(retryCount int) time.Duration {
 	if retryCount <= 0 {
 		return time.Second

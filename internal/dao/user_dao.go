@@ -22,6 +22,7 @@ type UserDB interface {
 	FindByIDs(ids []uint) ([]model.User, error)
 	CountByUsername(username string) (int64, error)
 	FindByUsernameLike(username string, limit int) ([]model.User, error)
+	UpdateRoleByIDs(ids []uint, role string) error
 }
 
 type UserCache interface {

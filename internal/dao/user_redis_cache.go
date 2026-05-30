@@ -15,6 +15,7 @@ type RedisUserCache struct {
 
 // Get 根据 key 获取缓存中的字符串数据
 func (r *RedisUserCache) Get(ctx context.Context, key string) (string, error) {
+
 	return r.Client.Get(ctx, key).Result()
 }
 

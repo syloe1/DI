@@ -15,6 +15,7 @@ type GormUserDB struct {
 // Create 创建用户
 // 将用户信息插入到数据库中
 func (g *GormUserDB) Create(user *model.User) error {
+	//INSERT INTO users (...) VALUES (...);
 	return g.DB.Create(user).Error
 }
 
@@ -22,6 +23,7 @@ func (g *GormUserDB) Create(user *model.User) error {
 // 通过主键ID获取单条用户记录
 func (g *GormUserDB) FindByID(id uint) (*model.User, error) {
 	var user model.User
+	//SELECT * FROM users WHERE id = ? LIMIT 1;
 	if err := g.DB.First(&user, id).Error; err != nil {
 		return nil, err
 	}
@@ -32,6 +34,7 @@ func (g *GormUserDB) FindByID(id uint) (*model.User, error) {
 // 用于登录、用户名重复校验等场景
 func (g *GormUserDB) FindByUsername(username string) (*model.User, error) {
 	var user model.User
+	//SELECT * FROM users WHERE username = ? LIMIT 1;
 	if err := g.DB.Where("username = ?", username).First(&user).Error; err != nil {
 		return nil, err
 	}
@@ -73,6 +76,7 @@ func (g *GormUserDB) FindByUsernameLike(username string, limit int) ([]model.Use
 // 一次性查询多个用户，提高接口效率
 func (g *GormUserDB) FindByIDs(ids []uint) ([]model.User, error) {
 	var users []model.User
+	//SELECT * FROM users WHERE id IN (?, ?, ?);
 	if err := g.DB.Where("id IN ?", ids).Find(&users).Error; err != nil {
 		return nil, err
 	}
@@ -89,4 +93,13 @@ func (g *GormUserDB) Update(user *model.User) error {
 // 根据主键ID删除对应的用户记录
 func (g *GormUserDB) Delete(id uint) error {
 	return g.DB.Delete(&model.User{}, id).Error
+}
+
+func (g *GormUserDB) UpdateRoleByIDs(ids []uint, role string) error {
+	if len(ids) == 0 {
+		return nil // 避免空切片导致全表更新
+	}
+	return g.DB.Model(&model.User{}).
+		Where("id IN (?)", ids).
+		Update("role", role).Error
 }

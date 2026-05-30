@@ -20,13 +20,13 @@ type GroupMessageEvent struct {
 }
 
 type ConsumerPool struct {
-	conn           *amqp.Connection
-	channel        *amqp.Channel
-	queueName      string
-	workerNum      int
-	tasks          chan amqp.Delivery
-	quitChan       chan struct{}
-	sessionManager gateway.SessionManager
+	conn           *amqp.Connection       // RabbitMQ 长连接
+	channel        *amqp.Channel          // RabbitMQ 信道（实际收发都走信道）
+	queueName      string                 // 要监听的队列名称
+	workerNum      int                    // 工作协程数量（并发消费数）
+	tasks          chan amqp.Delivery     // 任务缓冲通道：存放从队列取出的消息
+	quitChan       chan struct{}          // 全局退出信号，用于优雅关停
+	sessionManager gateway.SessionManager // 网关会话管理器（对接 QUIC/WebSocket 会话）
 }
 
 func NewConsumerPool(conn *amqp.Connection, queueName string, workerNum int, sm gateway.SessionManager) *ConsumerPool {
@@ -69,7 +69,7 @@ func (p *ConsumerPool) Run() error {
 		_ = ch.Close()
 		return err
 	}
-
+	//启动多工作协程 workerLoop
 	var wg sync.WaitGroup
 	for i := 0; i < p.workerNum; i++ {
 		wg.Add(1)
@@ -78,21 +78,21 @@ func (p *ConsumerPool) Run() error {
 			p.workerLoop()
 		}()
 	}
-
+	//启动消息拉取协程
 	go func() {
 		defer close(p.tasks)
 		for {
 			select {
-			case <-p.quitChan:
+			case <-p.quitChan: //收到关闭信号，直接退出；
 				return
-			case d, ok := <-deliveries:
+			case d, ok := <-deliveries: //读取 MQ 推送的消息：
 				if !ok {
 					return
 				}
 				select {
 				case <-p.quitChan:
 					return
-				case p.tasks <- d:
+				case p.tasks <- d: //消息d写入本地缓冲通道task
 				}
 			}
 		}
@@ -105,7 +105,7 @@ func (p *ConsumerPool) Run() error {
 
 func (p *ConsumerPool) Stop() {
 	select {
-	case <-p.quitChan:
+	case <-p.quitChan: //已经关闭 直接跳过
 	default:
 		close(p.quitChan)
 	}
@@ -125,6 +125,7 @@ func (p *ConsumerPool) workerLoop() {
 	}
 }
 
+// 把群消息推送给当前服务器所有在线用户
 func (p *ConsumerPool) pushToLocalUsers(event GroupMessageEvent) {
 	msgBytes, err := json.Marshal(event)
 	if err != nil {

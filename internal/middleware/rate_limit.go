@@ -15,8 +15,8 @@ import (
 type tokenBucket struct {
 	tokens     float64
 	capacity   float64
-	rate       float64
-	lastRefill time.Time
+	rate       float64   //每秒放多少令牌
+	lastRefill time.Time //最后放令牌时间
 }
 
 type inMemoryLimiter struct {

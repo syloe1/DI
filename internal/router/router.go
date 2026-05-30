@@ -42,7 +42,8 @@ func InitDependencyInjectionRouter(container *container.Container) *gin.Engine {
 		auth.GET("/user/list", container.UserHandler.GetUserList)
 		auth.GET("/user/:id", container.UserHandler.GetUser)
 		auth.POST("/user/logout", container.UserHandler.Logout)
-		auth.POST("/user/batch-roles", container.UserHandler.BatchGetUserRoles)
+		auth.GET("/user/batch-roles", container.UserHandler.BatchGetUserRoles)
+		auth.PUT("/user/batch-roles", container.UserHandler.BatchPutUserRoles)
 		auth.PUT("/user/:id", container.UserHandler.UpdateUser)
 		auth.PUT("/user/password/:id", container.UserHandler.ChangePassword)
 

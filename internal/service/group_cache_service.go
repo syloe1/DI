@@ -45,7 +45,7 @@ func (s *GroupCacheService) ActiveMemberIDs(ctx context.Context, groupID uint) (
 	if err != nil && err != redis.Nil {
 		return nil, err
 	}
-	//缓存不存子啊
+	//缓存不存在啊
 	if len(values) == 0 {
 		//查DB
 		ids, err := s.loadActiveMemberIDsFromDB(groupID)
@@ -229,6 +229,7 @@ func hashString(value string) uint32 {
 	return h.Sum32() //hash后的数字
 }
 
+
 func groupOnlineShardIndexKey(groupID uint, shard int) string {
 	return fmt.Sprintf("group_online:%d:%d", groupID, shard)
 }
@@ -243,3 +244,5 @@ func parseUintSet(values []string) []uint {
 	}
 	return ids
 }
+
+
