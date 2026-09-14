@@ -261,7 +261,7 @@ return core.NewBizError(http.StatusNotFound, "post not found")
 
 #### 4.7 健康检查
 
-无 `/health`、`/ready` 端点。Docker Compose 中使用 `condition: service_started` 检查，不准确。
+✅ 已实现：`GET /healthz`（进程存活）与 `GET /readyz`（MySQL SELECT 1 + Redis Ping + RabbitMQ 发布通道未关闭，任一失败返回 503），可用于 Docker healthcheck / 负载均衡探活。Docker Compose 可改用 `condition: service_healthy`。
 
 #### 4.8 API 版本化
 

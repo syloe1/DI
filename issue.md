@@ -19,6 +19,13 @@
 - [x] [P2-1] 死代码 → 删除 `internal/gateway/`、`chat_service.go`、`consumer_pool.go`；go.mod 清理 streadway/amqp
 - [x] [P2-3] N+1 查询 → 会话列表改批量 `IN` + `GROUP BY`（`message_dao.go`）
 - [x] [P2-4] QUIC → 整体移除（`internal/gateway/` 删除），实时通信统一 WebSocket
+- [x] [P0-2] CORS 反射 Origin → 白名单校验，命中才回显 Origin（`middleware/cors.go`，配置 `cors_origins`）
+- [x] [P0-3] JWT 经 URL Query → WS 握手改 `Sec-WebSocket-Protocol` 子协议优先，兼容 Bearer / `?token=` 兜底（`handler/ws_handler.go`）
+- [x] [P0-4] 明文密钥入库 → `config/config.yaml` 加入 `.gitignore` 并 `git rm --cached`，保留 `config.example.yaml`
+- [x] [P1-3] 限流器内存泄漏 → 定时清理 goroutine，10 分钟清除超时未访问 bucket（`middleware/rate_limit.go`）
+- [x] [P1-4] 健康检查 → 新增 `GET /healthz`（存活）与 `GET /readyz`（MySQL/Redis/RabbitMQ 连通，失败 503）（`router/router.go`）
+- [x] [P2-2] Context 反模式 → service 删除 struct ctx 字段，改方法参数 `ctx context.Context` 按请求传递（user/post/interact/message service）
+- [x] [P2-5] 两套在线状态 → 收敛为 PresenceService 唯一权威，删除 `user:online` Set 读写（`service/presence_service.go`）
 
 ---
 
@@ -48,10 +55,7 @@
 - **问题**：`defaultLimiter.buckets` map 只增不减，不同 IP/user 的 bucket 永久驻留，长期运行内存持续增长。
 - **建议**：加定时清理 goroutine，删除 `lastRefill` 超过阈值（如 10 分钟）未访问的 bucket。
 
-### [P1-4] 缺少健康检查端点
-- **位置**：`cmd/server/main.go` / `internal/router/router.go`
-- **问题**：无 `/health`、`/ready`，Docker Compose 用 `service_started` 判断不准确，无法用于负载均衡探活。
-- **建议**：加 `/health`（进程存活）和 `/ready`（检查 DB/Redis/MQ 连通性）。
+### [P1-4] 缺少健康检查端点 —— ✅ 已修复（见顶部 ✅ 区）
 
 ### [P1-5] DAO 层大量忽略 error —— ✅ 已修复（见顶部 ✅ 区）
 
@@ -66,10 +70,7 @@
 
 ### [P2-3] N+1 查询 —— ✅ 会话列表已修复（见顶部 ✅ 区）；`social_service.go` 待核对
 
-### [P2-5] 两套在线状态并存（冗余）
-- **位置**：`internal/service/ws_hub.go`（`SAdd user:online`）+ `internal/service/presence_service.go`（Lua）
-- **问题**：`user:online` 全局集合（供 `is_online` 展示）与 Presence（route/实例/下线）职责重叠，维护两份易不一致。
-- **建议**：收敛为 Presence 一套，`is_online` 由 `online:{uid}` 是否存在派生。
+### [P2-5] 两套在线状态并存（冗余） —— ✅ 已修复（见顶部 ✅ 区）
 
 ### [P2-6] Model 层泄漏 Gin binding 标签
 - **位置**：`internal/domain/model/post.go` 等
@@ -85,9 +86,7 @@
 
 ## P3 — 工程化与测试
 
-### [P3-1] 测试体系缺失
-- **问题**：0 个 `*_test.go`，无单元/集成测试。
-- **建议**：优先补 Service 层（Mock DAO）与核心链路（发送群消息 → outbox 落库）测试。
+### [P3-1] 测试体系缺失 —— ⚠️ 部分完成（S3-12 单元测试 + S3-13 DAO 集成测试已落地，见 `pkg/core/*_test.go` / `internal/service/*_test.go` / `internal/dao/integration_test.go`；Service 层 Mock 与更多覆盖待补）
 
 ### [P3-2] 无 CI/CD
 - **问题**：无 GitHub Actions，无自动 lint/build/test。

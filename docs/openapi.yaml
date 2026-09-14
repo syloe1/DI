@@ -11,6 +11,8 @@ servers:
   - url: http://localhost:19999
     description: Local development server
 tags:
+  - name: System
+    description: 健康检查（探活/就绪）
   - name: User
     description: 用户注册、登录、资料、角色和在线状态
   - name: Post
@@ -32,6 +34,40 @@ security:
   - bearerAuth: []
 
 paths:
+  /healthz:
+    get:
+      tags: [System]
+      summary: 存活探针
+      description: 进程存活即返回 200，用于 Docker healthcheck / 负载均衡探活。
+      security: []
+      responses:
+        "200":
+          description: 存活
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+
+  /readyz:
+    get:
+      tags: [System]
+      summary: 就绪探针
+      description: 检查 MySQL（SELECT 1）、Redis（Ping）、RabbitMQ（发布通道未关闭）；任一不可用返回 503。
+      security: []
+      responses:
+        "200":
+          description: 依赖全部就绪
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "503":
+          description: 某个依赖不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+
   /user/register:
     post:
       tags: [User]
@@ -191,15 +227,6 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/OK"
-    delete:
-      tags: [User]
-      summary: 删除用户
-      description: 管理员接口。
-      parameters:
-        - $ref: "#/components/parameters/UserID"
-      responses:
-        "200":
-          $ref: "#/components/responses/OK"
 
   /auth/user/password/{id}:
     put:
@@ -217,7 +244,7 @@ paths:
         "200":
           $ref: "#/components/responses/OK"
 
-  /auth/user/add:
+  /auth/admin/user/add:
     post:
       tags: [User]
       summary: 新增用户
@@ -228,6 +255,16 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/AddUserRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/admin/user/{id}:
+    delete:
+      tags: [User]
+      summary: 删除用户（管理员）
+      parameters:
+        - $ref: "#/components/parameters/UserID"
       responses:
         "200":
           $ref: "#/components/responses/OK"
@@ -575,6 +612,40 @@ paths:
         "200":
           $ref: "#/components/responses/OK"
 
+  /auth/message/sync:
+    get:
+      tags: [Message]
+      summary: 断线消息补偿（增量同步）
+      description: |
+        返回 id 大于 after_id、且与当前用户相关（我发出或收到）的消息，按 id 升序最多 limit 条。
+        客户端持久化返回的 last_id 作为下次游标继续拉，直到 has_more=false，即完成断线期间的补偿。
+      parameters:
+        - name: after_id
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        "200":
+          description: 增量消息列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/MessageSyncResult"
+
   /auth/message/send:
     post:
       tags: [Message]
@@ -827,20 +898,27 @@ paths:
       tags: [Realtime]
       summary: WebSocket 实时通信入口
       description: |
-        使用 query 参数传 JWT：`ws://localhost:19999/ws?token=<JWT>`。
+        鉴权（按优先级）：
+        1. **Sec-WebSocket-Protocol 子协议**传 JWT（推荐，不污染 URL / 访问日志）：
+           `new WebSocket("ws://localhost:19999/ws", [token])`，服务端握手会回显同一子协议；
+        2. `Authorization: Bearer <JWT>` 头；
+        3. 兜底 `?token=<JWT>`（仅兼容旧客户端）。
 
-        支持入站消息：
+        入站消息（客户端 → 服务端）：
 
         - 单聊：`{"type":"message","to_uid":2,"content":"hello"}`
         - 群聊：`{"type":"group_message","group_id":1,"content":"hello group"}`
         - 心跳：`{"type":"ping"}`
+
+        出站事件（服务端 → 客户端）：
+
+        - `{"type":"message","data":{...}}` 收到新私信
+        - `{"type":"message_sent","data":{...}}` 私信发送成功回执
+        - `{"type":"group_message_created","data":{...}}` 群消息推送
+        - `{"type":"message.read","data":{"peer_uid":2,"message_ids":[1,2],"read_at":"..."}}` 对方已读回执
+        - `{"type":"pong"}` 心跳响应
+        - `{"type":"error","data":{"message":"..."}}` 业务错误
       security: []
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema:
-            type: string
       responses:
         "101":
           description: WebSocket upgrade successful
@@ -1095,6 +1173,35 @@ components:
       properties:
         content:
           type: string
+
+    MessageSyncResult:
+      type: object
+      properties:
+        messages:
+          type: array
+          description: 本次增量拉取的消息（id 升序）
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+              from_uid:
+                type: integer
+              to_uid:
+                type: integer
+              content:
+                type: string
+              is_read:
+                type: boolean
+              created_at:
+                type: string
+                format: date-time
+        last_id:
+          type: integer
+          description: 下次 sync 的游标（客户端持久化）
+        has_more:
+          type: boolean
+          description: 是否还有更多（true 时用 last_id 继续拉）
 
     SendMessageRequest:
       type: object
