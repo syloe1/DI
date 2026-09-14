@@ -491,3 +491,5 @@ Authorization: Bearer <token>
 
 - [F:\DI\reliability.md](F:\DI\reliability.md)：可靠性、压测、告警、灰度和故障演练。
 - [F:\DI\future.md](F:\DI\future.md)：后续功能规划。
+- [F:\DI\docs\deploy-2c2g.md](F:\DI\docs\deploy-2c2g.md)：2C2G 小内存服务器部署调优（RabbitMQ/MySQL 内存限制 + swap）。
+- [F:\DI\docs\docker-run.md](F:\DI\docs\docker-run.md)：Docker Compose 一键启动说明。

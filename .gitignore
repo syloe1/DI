@@ -32,3 +32,7 @@ r.md
 
 # Secrets：本地真实配置不入库（用 config.example.yaml 作为模板）
 /config/config.yaml
+
+# Docker Compose 环境变量（真实密码放 .env，模板见 .env.example）
+.env
+.env.local

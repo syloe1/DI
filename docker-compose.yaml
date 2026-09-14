@@ -16,25 +16,25 @@ services:
       - "6060:6060"
     environment:
       INSTANCE_ID: app-1
-      APP_MYSQL_PASSWORD: "123456"
+      APP_MYSQL_PASSWORD: "${MYSQL_PASSWORD:-123456}"
       APP_MYSQL_HOST: mysql
       APP_REDIS_HOST: redis
       APP_RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
-      APP_JWT_SECRET: docker-dev-secret-change-in-production
+      APP_JWT_SECRET: "${JWT_SECRET:-docker-dev-secret-change-in-production}"
     restart: unless-stopped
 
   mysql:
     image: mysql:8.4
     container_name: go-admin-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: "123456"
+      MYSQL_ROOT_PASSWORD: "${MYSQL_PASSWORD:-123456}"
       MYSQL_DATABASE: go
     ports:
       - "3307:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p123456"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_PASSWORD:-123456}"]
       interval: 5s
       timeout: 3s
       retries: 30

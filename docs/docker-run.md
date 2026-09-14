@@ -57,3 +57,14 @@ docker compose down
 ```bash
 docker compose down -v
 ```
+
+## 敏感数据
+
+`docker-compose.yaml` 中的 MySQL 密码 / JWT 密钥使用环境变量引用
+（`${MYSQL_PASSWORD:-123456}`）：复制 `.env.example` 为 `.env` 并填入真实值即可
+（`.env` 已被 `.gitignore` 忽略）。不要直接改 yaml 里的默认值提交 Git。
+
+## 小内存服务器（2C2G）
+
+2C2G 上跑全家桶需要调优（RabbitMQ 限内存 + MySQL 瘦身 + swap 兜底），
+详见 [deploy-2c2g.md](deploy-2c2g.md)。
