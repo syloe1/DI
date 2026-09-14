@@ -1,9 +1,12 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
+	"time"
 
 	"go-admin/internal/dao"
 	"go-admin/pkg/core"
@@ -11,6 +14,23 @@ import (
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/gorilla/websocket"
 )
+
+var bufPool = sync.Pool{
+	New: func() interface{} {
+		return new(bytes.Buffer)
+	},
+}
+
+func marshalWithPool(v interface{}) ([]byte, error) {
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufPool.Put(buf)
+	enc := json.NewEncoder(buf)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
 
 type WSService struct {
 	hub       *WSHub
@@ -57,6 +77,12 @@ func (s *WSService) AuthenticateToken(token string) (uint, error) {
 }
 
 func (s *WSService) RegisterConnection(conn *websocket.Conn, userID uint) {
+	const pingTimeout = 60 * time.Second
+	conn.SetReadDeadline(time.Now().Add(pingTimeout))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(pingTimeout))
+		return nil
+	})
 	client := &WSClient{
 		Hub:    s.hub,
 		Conn:   conn,
@@ -70,7 +96,7 @@ func (s *WSService) RegisterConnection(conn *websocket.Conn, userID uint) {
 }
 
 func (s *WSService) BroadcastMessage(message interface{}) {
-	msgBytes, err := json.Marshal(message)
+	msgBytes, err := marshalWithPool(message)
 	if err != nil {
 		return
 	}
@@ -86,10 +112,13 @@ func (s *WSService) BroadcastMessage(message interface{}) {
 		select {
 		case client.Send <- msgBytes:
 		default:
-			close(client.Send) //关闭channel
-			s.hub.Mutex.Lock()
-			delete(s.hub.Clients, client.UserID)
-			s.hub.Mutex.Unlock()
+			// 慢客户端：不直接 close channel（二次 close 会 panic），
+			// 交给 Hub 事件循环安全清理。
+			select {
+			case s.hub.Unregister <- client:
+			default:
+				go func(c *WSClient) { s.hub.Unregister <- c }(client)
+			}
 		}
 	}
 }

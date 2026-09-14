@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go-admin/internal/dao"
@@ -21,8 +22,15 @@ type WSClient struct {
 	Conn   *websocket.Conn
 	UserID uint
 	Send   chan []byte
+	closed uint32 //原子标记 0 为关闭， 1 已关闭
 }
 
+// 待落库的任务
+type persistTask struct {
+	msg      *model.Message
+	groupMsg *model.ChatGroupMessage
+	event    *dto.GroupMessageCreatedEvent
+}
 type WSHub struct {
 	Clients    map[uint]*WSClient
 	Register   chan *WSClient
@@ -36,10 +44,14 @@ type WSHub struct {
 	GroupCache  *GroupCacheService
 	Cache       dao.UserCache
 	Ctx         context.Context
+
+	persistCh chan persistTask //有缓冲， 削峰
+	workers   int
+	done      chan struct{}
 }
 
 func NewWSHub(messageRepo dao.MessageRepository, groupRepo dao.GroupRepository, publisher GroupMessagePublisher, presence *PresenceService, groupCache *GroupCacheService, cache dao.UserCache, ctx context.Context) *WSHub {
-	return &WSHub{
+	h := &WSHub{
 		Clients:     make(map[uint]*WSClient),
 		Register:    make(chan *WSClient),
 		Unregister:  make(chan *WSClient),
@@ -50,9 +62,36 @@ func NewWSHub(messageRepo dao.MessageRepository, groupRepo dao.GroupRepository, 
 		GroupCache:  groupCache,
 		Cache:       cache,
 		Ctx:         ctx,
+		persistCh:   make(chan persistTask, 4096),
+		done:        make(chan struct{}),
+		workers:     16,
+	}
+	for i := 0; i < h.workers; i++ {
+		go h.persistWorker()
+	}
+	return h
+}
+func (h *WSHub) persistWorker() {
+	for {
+		select {
+		case <-h.done:
+			return
+		case task := <-h.persistCh:
+			if task.msg != nil {
+				if err := h.MessageRepo.CreateMessage(task.msg); err != nil {
+					log.Printf("save message failed: %v", err)
+				}
+			} else {
+				_ = h.GroupRepo.CreateGroupMessageWithOutboxBuilder(task.groupMsg,
+					func(saved *model.ChatGroupMessage) (*model.MessageOutbox, error) {
+						task.event.MessageID = saved.ID
+						task.event.CreatedAt = saved.CreatedAt
+						return buildGroupMessageOutbox(*task.event)
+					})
+			}
+		}
 	}
 }
-
 func (h *WSHub) Run() {
 	for {
 		select {
@@ -76,8 +115,16 @@ func (h *WSHub) SendMessageToUser(userID uint, message []byte) {
 	case client.Send <- message:
 		core.Metrics.PushDelivered.Add(1)
 	default:
+		// 慢客户端：通道已满，标记丢弃指标
 		core.Metrics.PushDroppedSlow.Add(1)
-		h.dropSlowClient(client)
+		// 不直接调用 unregisterClient（会获取写锁，与当前可能持有的读锁死锁），
+		// 改为异步投递到 Unregister 通道，让 Hub 事件循环安全处理。
+		select {
+		case h.Unregister <- client:
+		default:
+			// Unregister 通道也满了，启动 goroutine 保证不丢
+			go func() { h.Unregister <- client }()
+		}
 	}
 }
 
@@ -111,6 +158,8 @@ func (h *WSHub) Shutdown(ctx context.Context) {
 	}
 }
 
+// 串行跑IO, 整个hub卡住
+// Hub事件循环只做内存map + 锁， 外部IO 丢给goroutine
 func (h *WSHub) registerClient(client *WSClient) {
 	isNewUser := false
 	h.Mutex.Lock()
@@ -119,25 +168,31 @@ func (h *WSHub) registerClient(client *WSClient) {
 		isNewUser = true
 	}
 	if ok && old != client {
+		// release old resource
 		close(old.Send)
 		_ = old.Conn.Close()
 	}
 	h.Clients[client.UserID] = client
 	h.Mutex.Unlock()
-	if isNewUser {
-		core.Metrics.OnlineConnections.Add(1)
-	}
 
-	if h.Cache != nil {
-		_ = h.Cache.SAdd(h.Ctx, OnlineUsersKey, client.UserID)
-	}
-	if h.Presence != nil {
-		_ = h.Presence.RegisterOnline(h.Ctx, client.UserID)
-	}
-	if h.GroupCache != nil {
-		_ = h.GroupCache.AddUserOnlineGroups(h.Ctx, client.UserID)
-	}
-	log.Printf("user %d connected", client.UserID)
+	// 所有IO异步， 不阻塞Hub主循环
+	uid := client.UserID
+	go func() {
+		if isNewUser {
+			core.Metrics.OnlineConnections.Add(1)
+		}
+
+		if h.Cache != nil {
+			_ = h.Cache.SAdd(h.Ctx, OnlineUsersKey, uid)
+		}
+		if h.Presence != nil {
+			_ = h.Presence.RegisterOnline(h.Ctx, uid)
+		}
+		if h.GroupCache != nil {
+			_ = h.GroupCache.AddUserOnlineGroups(h.Ctx, uid)
+		}
+		log.Printf("user %d connected", uid)
+	}()
 }
 
 func (h *WSHub) unregisterClient(client *WSClient) {
@@ -154,18 +209,23 @@ func (h *WSHub) unregisterClient(client *WSClient) {
 	if !removed {
 		return
 	}
-	core.Metrics.OnlineConnections.Add(-1)
 
-	if h.Cache != nil {
-		_ = h.Cache.SRem(h.Ctx, OnlineUsersKey, client.UserID)
-	}
-	if h.Presence != nil {
-		_ = h.Presence.UnregisterOnline(h.Ctx, client.UserID)
-	}
-	if h.GroupCache != nil {
-		_ = h.GroupCache.RemoveUserOnlineGroups(h.Ctx, client.UserID)
-	}
-	log.Printf("user %d disconnected", client.UserID)
+	// IO 异步
+	uid := client.UserID
+	go func() {
+		core.Metrics.OnlineConnections.Add(-1)
+
+		if h.Cache != nil {
+			_ = h.Cache.SRem(h.Ctx, OnlineUsersKey, uid)
+		}
+		if h.Presence != nil {
+			_ = h.Presence.UnregisterOnline(h.Ctx, uid)
+		}
+		if h.GroupCache != nil {
+			_ = h.GroupCache.RemoveUserOnlineGroups(h.Ctx, uid)
+		}
+		log.Printf("user %d disconnected", uid)
+	}()
 }
 
 // 但websocket客户端发送消息太慢， 主动断开
@@ -176,8 +236,10 @@ func (h *WSHub) dropSlowClient(client *WSClient) {
 
 func (c *WSClient) writePump() {
 	defer func() {
-		c.Hub.Unregister <- c
-		_ = c.Conn.Close()
+		if atomic.CompareAndSwapUint32(&c.closed, 0, 1) {
+			c.Hub.Unregister <- c
+			_ = c.Conn.Close()
+		}
 	}()
 
 	for {
@@ -196,8 +258,11 @@ func (c *WSClient) writePump() {
 
 func (c *WSClient) readPump() {
 	defer func() {
-		c.Hub.Unregister <- c
-		_ = c.Conn.Close()
+		if atomic.CompareAndSwapUint32(&c.closed, 0, 1) {
+			c.Hub.Unregister <- c
+			_ = c.Conn.Close()
+		}
+
 	}()
 
 	for {
@@ -235,13 +300,19 @@ func (c *WSClient) handleMessage(toUID uint, content string) {
 		Content: content,
 		IsRead:  false,
 	}
-	if err := c.Hub.MessageRepo.CreateMessage(message); err != nil {
-		log.Printf("save message failed: %v", err)
+	select {
+	case c.Hub.persistCh <- persistTask{msg: message}:
+	default:
+		core.Metrics.PushDroppedSlow.Add(1) // 持久化队列也满了，背压保护
 		return
 	}
+	// if err := c.Hub.MessageRepo.CreateMessage(message); err != nil {
+	// 	log.Printf("save message failed: %v", err)
+	// 	return
+	// }
 
 	now := time.Now().Format(time.RFC3339)
-	receiverMsg, _ := json.Marshal(dto.WSOutboundMessage{
+	receiverMsg, _ := marshalWithPool(dto.WSOutboundMessage{
 		Type:    "message",
 		FromUID: c.UserID,
 		Content: content,
@@ -249,7 +320,7 @@ func (c *WSClient) handleMessage(toUID uint, content string) {
 	})
 	c.Hub.SendMessageToUser(toUID, receiverMsg)
 
-	confirmMsg, _ := json.Marshal(dto.WSOutboundMessage{
+	confirmMsg, _ := marshalWithPool(dto.WSOutboundMessage{
 		Type:    "message_sent",
 		ToUID:   toUID,
 		Content: content,
@@ -311,7 +382,7 @@ func (c *WSClient) handlePing() {
 	if c.Hub.Presence != nil {
 		_ = c.Hub.Presence.RefreshOnline(c.Hub.Ctx, c.UserID)
 	}
-	pongMsg, _ := json.Marshal(dto.WSOutboundMessage{
+	pongMsg, _ := marshalWithPool(dto.WSOutboundMessage{
 		Type: "pong",
 		Time: time.Now().Format(time.RFC3339),
 	})
@@ -319,7 +390,7 @@ func (c *WSClient) handlePing() {
 }
 
 func (c *WSClient) sendWSError(message string) {
-	errorMsg, _ := json.Marshal(dto.WSOutboundMessage{
+	errorMsg, _ := marshalWithPool(dto.WSOutboundMessage{
 		Type:    "error",
 		Message: message,
 		Time:    time.Now().Format(time.RFC3339),

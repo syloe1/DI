@@ -1,0 +1,1178 @@
+openapi: 3.0.3
+info:
+  title: go-admin API
+  version: 1.0.0
+  description: |
+    go-admin 是一个基于 Go/Gin 的社交与实时聊天后端项目。
+
+    主要能力包括用户、帖子、评论、互动、社交关系、私信、群聊、WebSocket 实时通信、
+    RabbitMQ 群消息广播、Redis 在线状态、Outbox 可靠事件发布和基础监控。
+servers:
+  - url: http://localhost:19999
+    description: Local development server
+tags:
+  - name: User
+    description: 用户注册、登录、资料、角色和在线状态
+  - name: Post
+    description: 帖子发布、查询、更新和删除
+  - name: Comment
+    description: 评论相关接口
+  - name: Interaction
+    description: 点赞、点踩、收藏、分享和互动状态
+  - name: Social
+    description: 关注、粉丝、拉黑和关系
+  - name: Message
+    description: 私信会话和消息
+  - name: Group
+    description: 群组、群成员、邀请、入群申请和群消息
+  - name: Realtime
+    description: WebSocket 实时通信
+
+security:
+  - bearerAuth: []
+
+paths:
+  /user/register:
+    post:
+      tags: [User]
+      summary: 用户注册
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "200":
+          description: 注册成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+
+  /user/login:
+    post:
+      tags: [User]
+      summary: 用户登录
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/LoginResponse"
+
+  /user/search:
+    get:
+      tags: [User]
+      summary: 按用户名搜索用户
+      security: []
+      parameters:
+        - name: username
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /user/online/list:
+    get:
+      tags: [User]
+      summary: 获取在线用户列表
+      security: []
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /user/{id}/online:
+    get:
+      tags: [User]
+      summary: 查询指定用户在线状态
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/UserID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /user/{id}:
+    get:
+      tags: [User]
+      summary: 查询用户资料
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/UserID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/user/list:
+    get:
+      tags: [User]
+      summary: 获取用户列表
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/user/logout:
+    post:
+      tags: [User]
+      summary: 用户退出登录
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/user/batch-roles:
+    get:
+      tags: [User]
+      summary: 批量查询用户角色
+      description: 当前实现使用 JSON body 绑定 ids。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchGetUserRolesRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+    put:
+      tags: [User]
+      summary: 批量修改用户角色
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchPutUserRolesRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /auth/user/{id}:
+    get:
+      tags: [User]
+      summary: 查询用户资料
+      parameters:
+        - $ref: "#/components/parameters/UserID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+    put:
+      tags: [User]
+      summary: 更新用户资料或角色
+      parameters:
+        - $ref: "#/components/parameters/UserID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+    delete:
+      tags: [User]
+      summary: 删除用户
+      description: 管理员接口。
+      parameters:
+        - $ref: "#/components/parameters/UserID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/user/password/{id}:
+    put:
+      tags: [User]
+      summary: 修改用户密码
+      parameters:
+        - $ref: "#/components/parameters/UserID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasswordRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/user/add:
+    post:
+      tags: [User]
+      summary: 新增用户
+      description: 管理员接口。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddUserRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /post/list:
+    get:
+      tags: [Post]
+      summary: 获取帖子列表
+      security: []
+      parameters:
+        - name: topic
+          in: query
+          schema:
+            type: string
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [time, hot]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /post/hot:
+    get:
+      tags: [Post]
+      summary: 获取热门帖子
+      security: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+            minimum: 1
+            maximum: 50
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /post/{id}:
+    get:
+      tags: [Post]
+      summary: 获取帖子详情
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/PostID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /post/user/{id}:
+    get:
+      tags: [Post]
+      summary: 获取指定用户发布的帖子
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/UserID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /post/user/{id}/liked:
+    get:
+      tags: [Post]
+      summary: 获取指定用户点赞过的帖子
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/UserID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /post/user/{id}/collected:
+    get:
+      tags: [Post]
+      summary: 获取指定用户收藏过的帖子
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/UserID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/post/create:
+    post:
+      tags: [Post]
+      summary: 创建帖子
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePostRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/post/my:
+    get:
+      tags: [Post]
+      summary: 获取当前用户帖子列表
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/post/{id}:
+    put:
+      tags: [Post]
+      summary: 更新帖子
+      parameters:
+        - $ref: "#/components/parameters/PostID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePostRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+    delete:
+      tags: [Post]
+      summary: 删除帖子
+      parameters:
+        - $ref: "#/components/parameters/PostID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /comment/post/{post_id}:
+    get:
+      tags: [Comment]
+      summary: 获取帖子评论列表
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/PostIDPathPostID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/comment/create:
+    post:
+      tags: [Comment]
+      summary: 创建评论
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCommentRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/comment/{id}:
+    put:
+      tags: [Comment]
+      summary: 更新评论
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCommentRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+    delete:
+      tags: [Comment]
+      summary: 删除评论
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/comment/my:
+    get:
+      tags: [Comment]
+      summary: 获取当前用户评论列表
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /interact/count/{post_id}:
+    get:
+      tags: [Interaction]
+      summary: 获取帖子互动计数
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/PostIDPathPostID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/interact/like/{post_id}:
+    post:
+      tags: [Interaction]
+      summary: 点赞或取消点赞
+      parameters:
+        - $ref: "#/components/parameters/PostIDPathPostID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/interact/dislike/{post_id}:
+    post:
+      tags: [Interaction]
+      summary: 点踩或取消点踩
+      parameters:
+        - $ref: "#/components/parameters/PostIDPathPostID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/interact/collect/{post_id}:
+    post:
+      tags: [Interaction]
+      summary: 收藏或取消收藏
+      parameters:
+        - $ref: "#/components/parameters/PostIDPathPostID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/interact/share/{post_id}:
+    post:
+      tags: [Interaction]
+      summary: 分享帖子
+      parameters:
+        - $ref: "#/components/parameters/PostIDPathPostID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/interact/status/{post_id}:
+    get:
+      tags: [Interaction]
+      summary: 获取当前用户对帖子的互动状态
+      parameters:
+        - $ref: "#/components/parameters/PostIDPathPostID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/social/follow/{uid}:
+    post:
+      tags: [Social]
+      summary: 关注或取消关注用户
+      parameters:
+        - $ref: "#/components/parameters/UID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/social/block/{uid}:
+    post:
+      tags: [Social]
+      summary: 拉黑或取消拉黑用户
+      parameters:
+        - $ref: "#/components/parameters/UID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/social/relation/{uid}:
+    get:
+      tags: [Social]
+      summary: 查询与指定用户的关系
+      parameters:
+        - $ref: "#/components/parameters/UID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/social/follows:
+    get:
+      tags: [Social]
+      summary: 获取关注列表
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/social/followers:
+    get:
+      tags: [Social]
+      summary: 获取粉丝列表
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/social/blocks:
+    get:
+      tags: [Social]
+      summary: 获取拉黑列表
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/message/conversations:
+    get:
+      tags: [Message]
+      summary: 获取私信会话列表
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/message/list:
+    get:
+      tags: [Message]
+      summary: 获取与指定用户的私信消息列表
+      parameters:
+        - name: peer_id
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/message/send:
+    post:
+      tags: [Message]
+      summary: 发送私信
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendMessageRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/message/{id}:
+    delete:
+      tags: [Message]
+      summary: 删除私信
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/groups:
+    post:
+      tags: [Group]
+      summary: 创建群组
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateGroupRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/groups/my:
+    get:
+      tags: [Group]
+      summary: 获取当前用户加入的群组
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/groups/{id}:
+    get:
+      tags: [Group]
+      summary: 获取群详情
+      parameters:
+        - $ref: "#/components/parameters/GroupID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/groups/{id}/members:
+    get:
+      tags: [Group]
+      summary: 获取群成员列表
+      parameters:
+        - $ref: "#/components/parameters/GroupID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/groups/{id}/join-requests:
+    get:
+      tags: [Group]
+      summary: 获取群入群申请列表
+      parameters:
+        - $ref: "#/components/parameters/GroupID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+    post:
+      tags: [Group]
+      summary: 申请加入群组
+      parameters:
+        - $ref: "#/components/parameters/GroupID"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApplyJoinGroupRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/groups/{id}/admins:
+    post:
+      tags: [Group]
+      summary: 设置群管理员
+      parameters:
+        - $ref: "#/components/parameters/GroupID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetGroupAdminRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/groups/{id}/admins/{user_id}:
+    delete:
+      tags: [Group]
+      summary: 取消群管理员
+      parameters:
+        - $ref: "#/components/parameters/GroupID"
+        - $ref: "#/components/parameters/UserIDPathUserID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/groups/{id}/members/{user_id}:
+    delete:
+      tags: [Group]
+      summary: 踢出群成员
+      parameters:
+        - $ref: "#/components/parameters/GroupID"
+        - $ref: "#/components/parameters/UserIDPathUserID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/groups/{id}/transfer-owner:
+    post:
+      tags: [Group]
+      summary: 转让群主
+      parameters:
+        - $ref: "#/components/parameters/GroupID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransferGroupOwnerRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/groups/{id}/dissolve:
+    post:
+      tags: [Group]
+      summary: 解散群组
+      parameters:
+        - $ref: "#/components/parameters/GroupID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/groups/{id}/invitations:
+    post:
+      tags: [Group]
+      summary: 邀请用户入群
+      parameters:
+        - $ref: "#/components/parameters/GroupID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InviteGroupMemberRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/groups/invitations/{id}/review:
+    post:
+      tags: [Group]
+      summary: 审核入群邀请
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewGroupInvitationRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/groups/join-requests/{id}/review:
+    post:
+      tags: [Group]
+      summary: 审核入群申请
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewJoinRequestRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/groups/{id}/leave:
+    post:
+      tags: [Group]
+      summary: 退出群组
+      parameters:
+        - $ref: "#/components/parameters/GroupID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /auth/groups/{id}/messages:
+    post:
+      tags: [Group]
+      summary: 发送群消息
+      description: 要求当前用户是 active 群成员，群状态为 normal。消息会入库。
+      parameters:
+        - $ref: "#/components/parameters/GroupID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendGroupMessageRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+    get:
+      tags: [Group]
+      summary: 获取群消息列表
+      parameters:
+        - $ref: "#/components/parameters/GroupID"
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
+  /ws:
+    get:
+      tags: [Realtime]
+      summary: WebSocket 实时通信入口
+      description: |
+        使用 query 参数传 JWT：`ws://localhost:19999/ws?token=<JWT>`。
+
+        支持入站消息：
+
+        - 单聊：`{"type":"message","to_uid":2,"content":"hello"}`
+        - 群聊：`{"type":"group_message","group_id":1,"content":"hello group"}`
+        - 心跳：`{"type":"ping"}`
+      security: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "101":
+          description: WebSocket upgrade successful
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+    UID:
+      name: uid
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+    UserID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+    UserIDPathUserID:
+      name: user_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+    PostID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+    PostIDPathPostID:
+      name: post_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+    GroupID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+  responses:
+    OK:
+      description: 请求成功
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiResponse"
+    Unauthorized:
+      description: 未登录或 token 无效
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiResponse"
+    Forbidden:
+      description: 无权限
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiResponse"
+
+  schemas:
+    ApiResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 200
+        msg:
+          type: string
+          example: success
+        data:
+          nullable: true
+
+    RegisterRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 32
+          example: alice
+        password:
+          type: string
+          minLength: 6
+          maxLength: 72
+          example: "123456"
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          example: alice
+        password:
+          type: string
+          example: "123456"
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        role:
+          type: string
+          enum: [user, admin, superadmin]
+
+    AddUserRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+        role:
+          type: string
+          enum: [user, admin, superadmin]
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        username:
+          type: string
+        role:
+          type: string
+          enum: [user, admin, superadmin]
+
+    ChangePasswordRequest:
+      type: object
+      required: [newPassword]
+      properties:
+        oldPassword:
+          type: string
+        newPassword:
+          type: string
+
+    BatchGetUserRolesRequest:
+      type: object
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: integer
+            minimum: 1
+          example: [1, 2, 3]
+
+    BatchPutUserRolesRequest:
+      type: object
+      required: [ids, role]
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: integer
+            minimum: 1
+          example: [2, 3]
+        role:
+          type: string
+          enum: [superadmin, admin, user]
+          example: admin
+
+    CreatePostRequest:
+      type: object
+      required: [title, content]
+      properties:
+        title:
+          type: string
+          maxLength: 128
+        content:
+          type: string
+          maxLength: 5000
+        is_public:
+          type: boolean
+        status:
+          type: string
+          enum: [published, draft, scheduled]
+        publish_at:
+          type: string
+          format: date-time
+          nullable: true
+        topics:
+          type: string
+        images:
+          type: string
+
+    UpdatePostRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        content:
+          type: string
+        is_public:
+          type: boolean
+        status:
+          type: string
+          enum: [published, draft, scheduled]
+        publish_at:
+          type: string
+          format: date-time
+          nullable: true
+        topics:
+          type: string
+        images:
+          type: string
+
+    CreateCommentRequest:
+      type: object
+      required: [post_id, content]
+      properties:
+        post_id:
+          type: integer
+          minimum: 1
+        content:
+          type: string
+        parent_id:
+          type: integer
+          nullable: true
+
+    UpdateCommentRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+
+    SendMessageRequest:
+      type: object
+      required: [to_uid, content]
+      properties:
+        to_uid:
+          type: integer
+          minimum: 1
+        content:
+          type: string
+
+    CreateGroupRequest:
+      type: object
+      required: [name, member_ids]
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          example: 技术交流群
+        member_ids:
+          type: array
+          minItems: 1
+          items:
+            type: integer
+            minimum: 1
+          example: [2, 3]
+
+    SetGroupAdminRequest:
+      type: object
+      required: [user_id]
+      properties:
+        user_id:
+          type: integer
+          minimum: 1
+
+    TransferGroupOwnerRequest:
+      type: object
+      required: [user_id]
+      properties:
+        user_id:
+          type: integer
+          minimum: 1
+
+    InviteGroupMemberRequest:
+      type: object
+      required: [invitee_id]
+      properties:
+        invitee_id:
+          type: integer
+          minimum: 1
+
+    ReviewGroupInvitationRequest:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [accept, reject]
+
+    ApplyJoinGroupRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          maxLength: 255
+
+    ReviewJoinRequestRequest:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [approve, reject]
+
+    SendGroupMessageRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+          example: 大家好，这是一条群消息

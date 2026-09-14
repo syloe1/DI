@@ -60,11 +60,11 @@ func main() {
 	ctx := context.Background()
 	switch *mode {
 	case "list":
-		if err := listDLQ(ctx, rabbit.ConsumeChannel, fullDLQ, *limit); err != nil {
+		if err := listDLQ(ctx, rabbit.ConsumeChan(), fullDLQ, *limit); err != nil {
 			log.Fatalf("list dlq failed: %v", err)
 		}
 	case "replay":
-		if err := replayDLQ(ctx, rabbit.ConsumeChannel, rabbit.PublishChannel, cfg.RabbitMQ.Exchange, fullDLQ, *limit); err != nil {
+		if err := replayDLQ(ctx, rabbit.ConsumeChan(), rabbit.PublishChan(), cfg.RabbitMQ.Exchange, fullDLQ, *limit); err != nil {
 			log.Fatalf("replay dlq failed: %v", err)
 		}
 	}

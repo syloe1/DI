@@ -1,5 +1,6 @@
 package service
 
+// 消息先写db outbox表， 异步goroutine轮询outbox, 然后读事件， 发到mq
 import (
 	"context"
 	"errors"

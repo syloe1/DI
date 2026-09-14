@@ -1,5 +1,6 @@
 package service
 
+// 群热点缓存
 import (
 	"context"
 	"fmt"
@@ -229,7 +230,6 @@ func hashString(value string) uint32 {
 	return h.Sum32() //hash后的数字
 }
 
-
 func groupOnlineShardIndexKey(groupID uint, shard int) string {
 	return fmt.Sprintf("group_online:%d:%d", groupID, shard)
 }
@@ -244,5 +244,3 @@ func parseUintSet(values []string) []uint {
 	}
 	return ids
 }
-
-

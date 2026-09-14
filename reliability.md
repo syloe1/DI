@@ -59,6 +59,9 @@ chat_consumer_succeeded_total
 chat_consumer_failed_total
 chat_outbox_published_total
 chat_outbox_publish_failed_total
+chat_outbox_pending
+chat_outbox_processing
+chat_outbox_failed
 ```
 
 建议告警：

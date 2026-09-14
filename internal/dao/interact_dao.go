@@ -1,6 +1,8 @@
 package dao
 
 import (
+	"errors"
+
 	"go-admin/internal/domain/model"
 
 	"gorm.io/gorm"
@@ -146,13 +148,22 @@ func (r *GormInteractRepository) CountShares(postID uint) (int64, error) {
 func (r *GormInteractRepository) GetInteractStatus(userID uint, postID uint) (map[string]interface{}, error) {
 	status := make(map[string]interface{})
 
-	like, _ := r.FindLike(userID, postID)
+	like, err := r.FindLike(userID, postID)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
 	status["liked"] = like != nil
 
-	dislike, _ := r.FindDislike(userID, postID)
+	dislike, err := r.FindDislike(userID, postID)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
 	status["disliked"] = dislike != nil
 
-	collect, _ := r.FindCollect(userID, postID)
+	collect, err := r.FindCollect(userID, postID)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
 	status["collected"] = collect != nil
 
 	return status, nil
@@ -161,16 +172,28 @@ func (r *GormInteractRepository) GetInteractStatus(userID uint, postID uint) (ma
 func (r *GormInteractRepository) GetInteractCount(postID uint) (map[string]int64, error) {
 	counts := make(map[string]int64)
 
-	likes, _ := r.CountLikes(postID)
+	likes, err := r.CountLikes(postID)
+	if err != nil {
+		return nil, err
+	}
 	counts["likes"] = likes
 
-	dislikes, _ := r.CountDislikes(postID)
+	dislikes, err := r.CountDislikes(postID)
+	if err != nil {
+		return nil, err
+	}
 	counts["dislikes"] = dislikes
 
-	collects, _ := r.CountCollects(postID)
+	collects, err := r.CountCollects(postID)
+	if err != nil {
+		return nil, err
+	}
 	counts["collects"] = collects
 
-	shares, _ := r.CountShares(postID)
+	shares, err := r.CountShares(postID)
+	if err != nil {
+		return nil, err
+	}
 	counts["shares"] = shares
 
 	return counts, nil

@@ -70,7 +70,6 @@ router -> middleware -> handler -> service -> dao -> domain model
 ├── internal/service        # 业务逻辑
 ├── pkg/core                # 基础设施
 ├── pkg/utils               # 通用工具
-├── plan.md                 # 高并发聊天系统设计计划
 ├── reliability.md          # 可靠性、压测、告警、灰度、演练手册
 ├── go.mod
 └── README.md
@@ -368,6 +367,9 @@ chat_consumer_succeeded_total
 chat_consumer_failed_total
 chat_outbox_published_total
 chat_outbox_publish_failed_total
+chat_outbox_pending
+chat_outbox_processing
+chat_outbox_failed
 ```
 
 配合 [F:\DI\reliability.md](F:\DI\reliability.md) 可以进行压测、容量评估、告警配置、灰度发布和故障演练。
@@ -517,6 +519,5 @@ Authorization: Bearer <token>
 
 ## 相关文档
 
-- [F:\DI\plan.md](F:\DI\plan.md)：生产级高并发聊天系统设计计划。
 - [F:\DI\reliability.md](F:\DI\reliability.md)：可靠性、压测、告警、灰度和故障演练。
 - [F:\DI\future.md](F:\DI\future.md)：后续功能规划。

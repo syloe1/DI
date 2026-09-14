@@ -40,6 +40,13 @@ type Container struct {
 	InteractHandler *handler.InteractHandler
 	GroupHandler    *handler.GroupHandler
 	GroupService    *service.GroupService
+
+	// 生命周期管理（优雅关闭 / MQ 重连）
+	Rabbit         *core.RabbitMQ
+	Presence       *service.PresenceService
+	Outbox         *service.OutboxService
+	Consumer       *service.GroupMessageConsumer
+	cancelConsumer context.CancelFunc
 }
 
 func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLogger *log.Logger) *Container {
@@ -64,7 +71,7 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 	if err != nil {
 		log.Fatalf("connect rabbitmq failed: %v", err)
 	}
-	groupMessagePublisher := service.NewRabbitGroupMessagePublisher(rabbit.PublishChannel, cfg.RabbitMQ.Exchange)
+	groupMessagePublisher := service.NewRabbitGroupMessagePublisher(rabbit, cfg.RabbitMQ.Exchange)
 	outboxService := service.NewOutboxService(outboxRepo, groupMessagePublisher, instanceID)
 	outboxService.Start(ctx)
 
@@ -74,10 +81,23 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 	postHandler := handler.NewPostHandler(postService)
 	wsService := service.NewWSService(messageRepo, groupRepo, groupMessagePublisher, presenceService, groupCacheService, userCache, ctx, jwtSecret)
 	wsHandler := handler.NewWSHandler(wsService)
-	groupMessageConsumer := service.NewGroupMessageConsumer(rabbit.ConsumeChannel, instanceQueue, groupRepo, groupCacheService, userCache, wsService.Hub())
-	if err := groupMessageConsumer.Start(ctx); err != nil {
+
+	// consumer 使用独立 ctx：优雅关闭和 MQ 重连时取消并重启
+	consumerCtx, cancelConsumer := context.WithCancel(ctx)
+	groupMessageConsumer := service.NewGroupMessageConsumer(rabbit, instanceQueue, groupRepo, groupCacheService, userCache, wsService.Hub())
+	if err := groupMessageConsumer.Start(consumerCtx); err != nil {
 		log.Fatalf("start group message consumer failed: %v", err)
 	}
+
+	// MQ 断线自动重连；重连成功后取消旧 consumer，在新通道上重启
+	go rabbit.RunReconnectLoop(ctx, func() {
+		cancelConsumer()
+		consumerCtx, cancelConsumer = context.WithCancel(ctx)
+		if err := groupMessageConsumer.Start(consumerCtx); err != nil {
+			log.Printf("restart group message consumer failed: %v", err)
+		}
+	})
+
 	commentService := service.NewCommentService(commentRepo)
 	commentHandler := handler.NewCommentHandler(commentService)
 	messageService := service.NewMessageService(messageRepo, userCache, ctx)
@@ -110,6 +130,35 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 		InteractHandler: interactHandler,
 		GroupHandler:    groupHandler,
 		GroupService:    groupService,
+		Rabbit:          rabbit,
+		Presence:        presenceService,
+		Outbox:          outboxService,
+		Consumer:        groupMessageConsumer,
+		cancelConsumer:  cancelConsumer,
+	}
+}
+
+// Shutdown 按「启动逆序」清理资源：
+// WS 连接 → Redis 在线状态 → outbox/consumer → RabbitMQ。
+func (c *Container) Shutdown(ctx context.Context) {
+	if c == nil {
+		return
+	}
+	// 1. 关闭 WebSocket 连接（unregisterClient 会触发 Presence 清理）
+	if c.WSService != nil && c.WSService.Hub() != nil {
+		c.WSService.Hub().Shutdown(ctx)
+	}
+	// 2. 兜底：Lua 原子清理本实例 Redis 在线状态
+	if c.Presence != nil {
+		_ = c.Presence.Shutdown(ctx)
+	}
+	// 3. 停 outbox worker 与 MQ consumer（ctx 取消）
+	if c.cancelConsumer != nil {
+		c.cancelConsumer()
+	}
+	// 4. 关闭 RabbitMQ（触发重连循环退出）
+	if c.Rabbit != nil {
+		_ = c.Rabbit.Close()
 	}
 }
 
@@ -121,5 +170,6 @@ func resolveInstanceID() string {
 	if err != nil || hostname == "" {
 		hostname = "unknown"
 	}
+	//主机名 + 进程pID去做
 	return fmt.Sprintf("%s-%d", hostname, os.Getpid())
 }

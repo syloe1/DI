@@ -1,5 +1,6 @@
 package core
 
+// en-zh
 import (
 	"errors"
 	"net/http"

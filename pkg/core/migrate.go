@@ -1,5 +1,6 @@
 package core
 
+//gorm 自动迁移
 import (
 	"go-admin/internal/domain/model"
 

@@ -5,6 +5,7 @@ import (
 	"os"
 )
 
+// 快速封装一个带前缀的日志
 /*
 log.LstdFlags：等价于 Ldate | Ltime，输出 日期 + 时分秒
 log.Lshortfile：输出 代码文件名 + 行号，快速定位日志所在代码位置

@@ -1,0 +1,41 @@
+# =============================================================================
+# DI 应用配置模板
+# =============================================================================
+# 复制此文件为 config.yaml 并按需修改。
+# 密码和密钥等敏感值建议通过环境变量注入，不要写入文件提交 Git。
+#
+# 环境变量覆盖规则：
+#   前缀 APP_ + 下划线路径（全大写）
+#   例如 APP_MYSQL_PASSWORD=xxx 会覆盖 mysql.password
+#   例如 APP_JWT_SECRET=xxx 会覆盖 jwt.secret
+
+server:
+  port: "19999"
+  read_timeout: 30s
+  write_timeout: 30s
+
+mysql:
+  host: "127.0.0.1"
+  port: "3306"
+  dbname: "go"
+  username: "root"
+  password: ""                # ← 环境变量 APP_MYSQL_PASSWORD
+  max_idle_conns: 10
+  max_open_conns: 100
+  conn_max_lifetime: 1h
+
+redis:
+  host: "127.0.0.1"
+  port: "6379"
+  password: ""                # ← 环境变量 APP_REDIS_PASSWORD
+  db: 0
+  pool_size: 32
+
+jwt:
+  secret: "change-me"         # ← 环境变量 APP_JWT_SECRET
+  expire_hours: 24
+
+rabbitmq:
+  url: "amqp://guest:guest@127.0.0.1:5672/"  # ← 环境变量 APP_RABBITMQ_URL
+  exchange: "chat.events"
+  queue: "group_message_push"

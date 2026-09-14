@@ -1,6 +1,8 @@
 package dao
 
 import (
+	"errors"
+
 	"go-admin/internal/domain/model"
 
 	"gorm.io/gorm"
@@ -143,16 +145,28 @@ func (r *GormSocialRepository) GetBlockedUsers(userID uint) ([]model.UserRelatio
 func (r *GormSocialRepository) GetRelationStatus(fromUID uint, toUID uint) (map[string]interface{}, error) {
 	status := make(map[string]interface{})
 
-	follow, _ := r.FindFollowRelation(fromUID, toUID)
+	follow, err := r.FindFollowRelation(fromUID, toUID)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
 	status["following"] = follow != nil
 
-	followed, _ := r.FindFollowRelation(toUID, fromUID)
+	followed, err := r.FindFollowRelation(toUID, fromUID)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
 	status["followed"] = followed != nil
 
-	block, _ := r.FindBlockRelation(fromUID, toUID)
+	block, err := r.FindBlockRelation(fromUID, toUID)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
 	status["blocked"] = block != nil
 
-	blocked, _ := r.FindBlockRelation(toUID, fromUID)
+	blocked, err := r.FindBlockRelation(toUID, fromUID)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
 	status["blocked_by"] = blocked != nil
 
 	return status, nil

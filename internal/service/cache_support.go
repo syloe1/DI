@@ -8,6 +8,7 @@ import (
 	"go-admin/internal/dao"
 )
 
+// 缓存支持
 const (
 	cacheNullValue  = "null"                // 缓存空值标记（解决缓存穿透）
 	defaultCacheTTL = 5 * time.Minute       // 正常数据缓存过期时间
@@ -19,12 +20,10 @@ const (
 )
 
 // 缓存抖动TTL
-//type Duration int64
+// type Duration int64
 func jitterTTL(base time.Duration) time.Duration {
 	return base + time.Duration(rand.Intn(maxCacheJitter))*time.Second
 }
-
-
 
 // 缓存重试机制
 func spinWaitCache(cache dao.UserCache, ctx context.Context, key string) (string, bool) {

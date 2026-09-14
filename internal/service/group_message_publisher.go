@@ -1,10 +1,12 @@
 package service
 
+// 把消息发送给mq
 import (
 	"context"
 	"encoding/json"
 
 	"go-admin/internal/dto"
+	"go-admin/pkg/core"
 
 	"github.com/rabbitmq/amqp091-go"
 )
@@ -14,13 +16,13 @@ type GroupMessagePublisher interface {
 }
 
 type RabbitGroupMessagePublisher struct {
-	ch       *amqp091.Channel
+	rabbit   *core.RabbitMQ
 	exchange string
 }
 
-func NewRabbitGroupMessagePublisher(ch *amqp091.Channel, exchange string) *RabbitGroupMessagePublisher {
+func NewRabbitGroupMessagePublisher(rabbit *core.RabbitMQ, exchange string) *RabbitGroupMessagePublisher {
 	return &RabbitGroupMessagePublisher{
-		ch:       ch,
+		rabbit:   rabbit,
 		exchange: exchange,
 	}
 }
@@ -35,7 +37,8 @@ func (p *RabbitGroupMessagePublisher) PublishGroupMessageCreated(ctx context.Con
 }
 
 func (p *RabbitGroupMessagePublisher) PublishRaw(ctx context.Context, body []byte) error {
-	return p.ch.PublishWithContext(
+	// 每次从 RabbitMQ 现取当前通道：断线重连后自动指向新通道
+	return p.rabbit.PublishChan().PublishWithContext(
 		ctx,
 		p.exchange,
 		"",

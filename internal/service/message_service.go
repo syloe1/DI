@@ -52,6 +52,13 @@ type SendMessageResult struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// MessageSyncResult 断线补偿的增量同步结果
+type MessageSyncResult struct {
+	Messages []MessageListItem `json:"messages"`
+	LastID   uint              `json:"last_id"`  // 下次 sync 的游标（客户端持久化）
+	HasMore  bool              `json:"has_more"` // 是否还有更多，true 时用 LastID 继续拉
+}
+
 type MessageService struct {
 	messageRepo dao.MessageRepository
 	cache       dao.UserCache
@@ -71,22 +78,39 @@ func (s *MessageService) GetConversations(userID uint) ([]ConversationItem, erro
 	if err != nil {
 		return nil, core.NewBizError(http.StatusInternalServerError, "get conversations failed")
 	}
+	if len(conversations) == 0 {
+		return []ConversationItem{}, nil
+	}
+
+	// N+1 修复：先收集全部 peerID，用两条批量查询替代循环内的 FindUserByID / CountUnreadMessages
+	// 原实现：50 个会话 = 100 次查询；现实现：固定 3 次（会话 + 用户批量 + 未读批量）
+	peerIDs := make([]uint, 0, len(conversations))
+	for _, conv := range conversations {
+		peerIDs = append(peerIDs, conv.PeerUID)
+	}
+
+	users, err := s.messageRepo.FindUsersByIDs(peerIDs)
+	if err != nil {
+		return nil, core.NewBizError(http.StatusInternalServerError, "load peer users failed")
+	}
+	unreadMap, err := s.messageRepo.CountUnreadByPeers(userID, peerIDs)
+	if err != nil {
+		return nil, core.NewBizError(http.StatusInternalServerError, "load unread counts failed")
+	}
 
 	result := make([]ConversationItem, 0, len(conversations))
 	for _, conv := range conversations {
-		user, err := s.messageRepo.FindUserByID(conv.PeerUID)
-		if err != nil {
+		user, ok := users[conv.PeerUID]
+		if !ok {
 			continue
 		}
-
-		unread, _ := s.messageRepo.CountUnreadMessages(userID, conv.PeerUID)
 		result = append(result, ConversationItem{
 			UID:      conv.PeerUID,
 			Username: user.Username,
 			Avatar:   "",
 			LastMsg:  conv.LastMsg,
 			LastTime: conv.LastTime,
-			Unread:   unread,
+			Unread:   unreadMap[conv.PeerUID],
 		})
 	}
 
@@ -132,6 +156,47 @@ func (s *MessageService) GetMessageList(userID uint, peerID uint, page int, page
 		Messages: result,
 		Page:     page,
 		PageSize: pageSize,
+	}, nil
+}
+
+func (s *MessageService) SyncMessages(userID uint, afterID uint, limit int) (*MessageSyncResult, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	// 多取一条判断是否还有更多，避免额外 COUNT 查询
+	messages, err := s.messageRepo.SyncMessages(userID, afterID, limit+1)
+	if err != nil {
+		return nil, core.NewBizError(http.StatusInternalServerError, "sync messages failed")
+	}
+	hasMore := len(messages) > limit
+	if hasMore {
+		messages = messages[:limit]
+	}
+
+	result := make([]MessageListItem, 0, len(messages))
+	lastID := afterID
+	for _, msg := range messages {
+		result = append(result, MessageListItem{
+			ID:        msg.ID,
+			FromUID:   msg.FromUID,
+			ToUID:     msg.ToUID,
+			Content:   msg.Content,
+			IsRead:    msg.IsRead,
+			CreatedAt: msg.CreatedAt,
+		})
+		if msg.ID > lastID {
+			lastID = msg.ID
+		}
+	}
+
+	return &MessageSyncResult{
+		Messages: result,
+		LastID:   lastID,
+		HasMore:  hasMore,
 	}, nil
 }
 

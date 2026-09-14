@@ -15,6 +15,11 @@ type MessageRepository interface {
 	GetMessages(userID uint, peerID uint, offset int, limit int) ([]model.Message, error)
 	MarkMessagesAsRead(userID uint, peerID uint) error
 	CountUnreadMessages(userID uint, peerID uint) (int64, error)
+	// N+1 修复：批量查询接口（替代循环内单查）
+	FindUsersByIDs(ids []uint) (map[uint]*model.User, error)
+	CountUnreadByPeers(userID uint, peerIDs []uint) (map[uint]int64, error)
+	// 断线补偿：增量拉取 id 大于 afterID 的消息（按 id 升序，limit 条）
+	SyncMessages(userID uint, afterID uint, limit int) ([]model.Message, error)
 	DeleteMessage(message *model.Message) error
 
 	// 用户相关方法
@@ -125,6 +130,57 @@ func (r *GormMessageRepository) CountUnreadMessages(userID uint, peerID uint) (i
 	}
 
 	return count, nil
+}
+
+// FindUsersByIDs 批量查询用户（N+1 修复：一次 IN 查询替代循环 FindUserByID）。
+// 返回 map[userID]*User，不存在的 ID 不在 map 中。
+func (r *GormMessageRepository) FindUsersByIDs(ids []uint) (map[uint]*model.User, error) {
+	var users []model.User
+	if err := r.db.Where("id IN ?", ids).Find(&users).Error; err != nil {
+		return nil, err
+	}
+	result := make(map[uint]*model.User, len(users))
+	for i := range users {
+		result[users[i].ID] = &users[i]
+	}
+	return result, nil
+}
+
+// CountUnreadByPeers 批量统计 peerIDs 中每个用户发给 userID 的未读数（N+1 修复：一次 GROUP BY 替代循环 CountUnreadMessages）。
+// 返回 map[fromUID]unreadCount，没有未读的 peer 不在 map 中（读为 0）。
+func (r *GormMessageRepository) CountUnreadByPeers(userID uint, peerIDs []uint) (map[uint]int64, error) {
+	type unreadRow struct {
+		FromUID uint
+		Count   int64
+	}
+	var rows []unreadRow
+	// GORM 的 Model(&model.Message{}) 会自动附加 deleted_at IS NULL（软删除）
+	if err := r.db.Model(&model.Message{}).
+		Select("from_uid, COUNT(*) AS count").
+		Where("to_uid = ? AND from_uid IN ? AND is_read = false", userID, peerIDs).
+		Group("from_uid").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	result := make(map[uint]int64, len(rows))
+	for _, row := range rows {
+		result[row.FromUID] = row.Count
+	}
+	return result, nil
+}
+
+// SyncMessages 增量拉取：获取 id 大于 afterID、且与 userID 相关的消息（断线补偿用）。
+// 按 id 升序返回最多 limit 条；客户端用返回的最后一条 id 作为下一次游标继续拉。
+func (r *GormMessageRepository) SyncMessages(userID uint, afterID uint, limit int) ([]model.Message, error) {
+	var messages []model.Message
+	if err := r.db.
+		Where("id > ? AND (from_uid = ? OR to_uid = ?)", afterID, userID, userID).
+		Order("id ASC").
+		Limit(limit).
+		Find(&messages).Error; err != nil {
+		return nil, err
+	}
+	return messages, nil
 }
 
 // DeleteMessage 删除消息（软删除）

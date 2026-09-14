@@ -9,6 +9,7 @@ import (
 	"go-admin/internal/dto"
 )
 
+// 打包mq事件存入db
 func buildGroupMessageOutbox(event dto.GroupMessageCreatedEvent) (*model.MessageOutbox, error) {
 	body, err := json.Marshal(event)
 	if err != nil {

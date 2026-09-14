@@ -1,5 +1,6 @@
 package service
 
+//群消息写入数据库后，会投递一条事件消息到 RabbitMQ；这个消费者消费这条事件，**拿到群在线成员，并发通过 WebSocket 把群消息推送给所有在线群成员**，同时实现**幂等防重复消费**。
 import (
 	"context"
 	"encoding/json"
@@ -18,28 +19,28 @@ import (
 )
 
 const (
-	defaultGroupMessageConsumerWorkers = 8   // MQ 消费协程数
-	defaultPushShardWorkers            = 16  // 消息推送协程数
+	defaultGroupMessageConsumerWorkers = 8  // MQ 消费协程数
+	defaultPushShardWorkers            = 16 // 消息推送协程数
 
 	groupMessageProcessedKeyPrefix = "group_message_processed:" // 幂等Key前缀
-	groupMessageProcessingTTL      = 5 * time.Minute             // 处理中状态过期时间
-	groupMessageProcessedTTL       = 7 * 24 * time.Hour          // 已完成状态过期时间
+	groupMessageProcessingTTL      = 5 * time.Minute            // 处理中状态过期时间
+	groupMessageProcessedTTL       = 7 * 24 * time.Hour         // 已完成状态过期时间
 )
 
 type GroupMessageConsumer struct {
-	ch          *amqp091.Channel   // RabbitMQ 信道
-	queue       string             // 消费队列名
-	groupRepo   dao.GroupRepository// 群数据库DAO
-	groupCache  *GroupCacheService // 群成员/在线缓存服务（前面整套分片缓存）
-	cache       dao.UserCache      // Redis 缓存客户端（用于幂等去重）
-	hub         *WSHub             // WebSocket 连接管理器，负责推送消息
-	workers     int                // MQ 消费协程数
-	pushWorkers int                // 分片推送协程数
+	rabbit      *core.RabbitMQ      // RabbitMQ（断线重连后自动指向新通道）
+	queue       string              // 消费队列名
+	groupRepo   dao.GroupRepository // 群数据库DAO
+	groupCache  *GroupCacheService  // 群成员/在线缓存服务（前面整套分片缓存）
+	cache       dao.UserCache       // Redis 缓存客户端（用于幂等去重）
+	hub         *WSHub              // WebSocket 连接管理器，负责推送消息
+	workers     int                 // MQ 消费协程数
+	pushWorkers int                 // 分片推送协程数
 }
 
-func NewGroupMessageConsumer(ch *amqp091.Channel, queue string, groupRepo dao.GroupRepository, groupCache *GroupCacheService, cache dao.UserCache, hub *WSHub) *GroupMessageConsumer {
+func NewGroupMessageConsumer(rabbit *core.RabbitMQ, queue string, groupRepo dao.GroupRepository, groupCache *GroupCacheService, cache dao.UserCache, hub *WSHub) *GroupMessageConsumer {
 	return &GroupMessageConsumer{
-		ch:          ch,
+		rabbit:      rabbit,
 		queue:       queue,
 		groupRepo:   groupRepo,
 		groupCache:  groupCache,
@@ -55,11 +56,13 @@ func (c *GroupMessageConsumer) Start(ctx context.Context) error {
 		c.workers = defaultGroupMessageConsumerWorkers
 	}
 
-	if err := c.ch.Qos(c.workers*2, 0, false); err != nil {
+	// 每次从 RabbitMQ 现取当前消费通道（重连后由容器重新调用 Start）
+	ch := c.rabbit.ConsumeChan()
+	if err := ch.Qos(c.workers*2, 0, false); err != nil {
 		return err
 	}
 	//订阅队列
-	deliveries, err := c.ch.Consume(c.queue, "", false, false, false, false, nil)
+	deliveries, err := ch.Consume(c.queue, "", false, false, false, false, nil)
 	if err != nil {
 		return err
 	}
@@ -135,7 +138,7 @@ func (c *GroupMessageConsumer) handleDelivery(ctx context.Context, d amqp091.Del
 	if dedupeKey == "" {
 		return nil
 	}
-    //幂等机制
+	//幂等机制
 	processed, err := c.markProcessing(ctx, dedupeKey)
 	if err != nil {
 		return err

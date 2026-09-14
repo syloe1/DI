@@ -1,0 +1,10 @@
+.git
+.idea
+*.exe
+*.log
+tmp
+dist
+node_modules
+mysql-data
+redis-data
+rabbitmq-data

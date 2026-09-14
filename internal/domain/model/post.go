@@ -15,7 +15,7 @@ const (
 
 type Post struct {
 	gorm.Model
-	Title     string     `gorm:"size:128;not null" json:"title" binding:"required,min=1,max=128`
+	Title     string     `gorm:"size:128;not null" json:"title" binding:"required,min=1,max=128"`
 	Content   string     `gorm:"type:text" json:"content" binding:"required,min=1,max=5000"`
 	IsPublic  bool       `json:"is_public"`
 	Status    string     `gorm:"size:16;default:published" json:"status" binding:"omitempty,oneof=published draft scheduled"`

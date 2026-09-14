@@ -40,6 +40,22 @@ func (h *MessageHandler) GetMessageList(c *gin.Context) {
 	core.Success(c, data)
 }
 
+// SyncMessages 断线重连后的增量同步：GET /auth/message/sync?after_id=&limit=
+func (h *MessageHandler) SyncMessages(c *gin.Context) {
+	var query dto.MessageSyncQuery
+	if err := c.ShouldBindQuery(&query); err != nil {
+		core.FailByError(c, core.ParseBindError(err))
+		return
+	}
+
+	data, err := h.svc.SyncMessages(c.GetUint("userID"), query.AfterID, query.Limit)
+	if err != nil {
+		core.FailByError(c, err)
+		return
+	}
+	core.Success(c, data)
+}
+
 func (h *MessageHandler) SendMessage(c *gin.Context) {
 	var req dto.SendMessageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

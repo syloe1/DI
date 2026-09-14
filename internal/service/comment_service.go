@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm"
 )
 
+// curd
 type CommentService struct {
 	commentRepo dao.CommentRepository
 }
