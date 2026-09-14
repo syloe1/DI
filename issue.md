@@ -72,7 +72,7 @@
 
 ### [P2-5] 两套在线状态并存（冗余） —— ✅ 已修复（见顶部 ✅ 区）
 
-### [P2-6] Model 层泄漏 Gin binding 标签
+### [P2-6] Model 层泄漏 Gin binding 标签 —— ✅ 已修复（model/post.go 的 5 处 binding 标签已删除；校验在 dto 的 CreatePostRequest/UpdatePostRequest 中已完整存在，handler 绑定 dto，删除纯收益）
 - **位置**：`internal/domain/model/post.go` 等
 - **问题**：数据库模型上挂 HTTP 参数绑定标签，DB 层耦合 HTTP 框架。
 - **建议**：binding 标签全部移到 `dto`，Model 只留 gorm/json 序列化标签。

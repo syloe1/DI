@@ -15,16 +15,16 @@ const (
 
 type Post struct {
 	gorm.Model
-	Title     string     `gorm:"size:128;not null" json:"title" binding:"required,min=1,max=128"`
-	Content   string     `gorm:"type:text" json:"content" binding:"required,min=1,max=5000"`
+	Title     string     `gorm:"size:128;not null" json:"title"`
+	Content   string     `gorm:"type:text" json:"content"`
 	IsPublic  bool       `json:"is_public"`
-	Status    string     `gorm:"size:16;default:published" json:"status" binding:"omitempty,oneof=published draft scheduled"`
+	Status    string     `gorm:"size:16;default:published" json:"status"`
 	PublishAt *time.Time `json:"publish_at"`
-	Topics    string     `gorm:"size:255" json:"topics" binding:"omitempty,max=255"`
+	Topics    string     `gorm:"size:255" json:"topics"`
 	UserID    uint       `gorm:"not null;index" json:"user_id"`
 	Username  string     `gorm:"size:32" json:"username"`
 	User      User       `gorm:"foreignKey:UserID" json:"user,omitempty"`
-	Images    string     `gorm:"size:512" json:"images" binding:"omitempty,max=512"`
+	Images    string     `gorm:"size:512" json:"images"`
 	ViewCount int64      `gorm:"-" json:"view_count"`
 }
 
