@@ -131,6 +131,18 @@ func (r *RabbitMQ) ConsumeChan() *amqp091.Channel {
 	return r.consumeCh
 }
 
+// nextReconnectBackoff 指数退避：1s 起步，每次 ×2，上限 30s（避免重连风暴）。
+func nextReconnectBackoff(current time.Duration) time.Duration {
+	if current < time.Second {
+		return time.Second
+	}
+	next := current * 2
+	if next > 30*time.Second {
+		return 30 * time.Second
+	}
+	return next
+}
+
 // RunReconnectLoop 监听连接关闭事件，指数退避自动重连。
 // onReconnect 在重连成功后回调（用于重启 consumer）。
 // 主动 Close() 时 NotifyClose 收到 nil，循环正常退出。
@@ -146,9 +158,7 @@ func (r *RabbitMQ) RunReconnectLoop(ctx context.Context, onReconnect func()) {
 			}
 			log.Printf("rabbitmq connection lost: %v, retry in %v", err, backoff)
 			time.Sleep(backoff)
-			if backoff < 30*time.Second {
-				backoff *= 2
-			}
+			backoff = nextReconnectBackoff(backoff)
 			if err := r.connect(); err != nil {
 				log.Printf("rabbitmq reconnect failed: %v", err)
 				continue // 失败保持退避，继续
