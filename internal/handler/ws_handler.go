@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"log"
 	"net/http"
 	"strings"
 
@@ -108,7 +107,7 @@ func (h *WSHandler) HandleWebSocket(c *gin.Context) {
 
 	conn, err := h.upgrader.Upgrade(c.Writer, c.Request, respHeader)
 	if err != nil {
-		log.Printf("websocket upgrade failed: %v", err)
+		core.Z().Errorf("websocket upgrade failed: %v", err)
 		return
 	}
 

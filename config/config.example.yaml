@@ -42,3 +42,7 @@ rabbitmq:
   url: "amqp://guest:guest@127.0.0.1:5672/"  # ← 环境变量 APP_RABBITMQ_URL
   exchange: "chat.events"
   queue: "group_message_push"
+
+logger:
+  level: "info"                  # debug / info / warn / error（环境变量 APP_LOGGER_LEVEL）
+  format: "console"              # console（开发，带颜色）/ json（生产，结构化可采集）

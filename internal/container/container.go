@@ -3,7 +3,6 @@ package container
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"time"
 
@@ -14,12 +13,13 @@ import (
 	"go-admin/pkg/core"
 
 	"github.com/go-redis/redis/v8"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
 type Container struct {
 	Config    *config.App
-	Logger    *log.Logger
+	Logger    *zap.SugaredLogger
 	DB        *gorm.DB
 	Redis     *redis.Client
 	JWTSecret []byte
@@ -50,7 +50,7 @@ type Container struct {
 	cancelConsumer context.CancelFunc
 }
 
-func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLogger *log.Logger) *Container {
+func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLogger *zap.SugaredLogger) *Container {
 	ctx := context.Background()
 	jwtSecret := []byte(cfg.GetJwtConfig().Secret)
 
@@ -70,7 +70,7 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 	groupCacheService := service.NewGroupCacheService(redisClient, groupRepo)
 	rabbit, err := core.NewRabbitMQ(cfg.RabbitMQ.URL, cfg.RabbitMQ.Exchange, instanceQueue)
 	if err != nil {
-		log.Fatalf("connect rabbitmq failed: %v", err)
+		core.Z().Fatalf("connect rabbitmq failed: %v", err)
 	}
 	groupMessagePublisher := service.NewRabbitGroupMessagePublisher(rabbit, cfg.RabbitMQ.Exchange)
 	outboxService := service.NewOutboxService(outboxRepo, groupMessagePublisher, instanceID)
@@ -89,7 +89,7 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 	consumerCtx, cancelConsumer := context.WithCancel(ctx)
 	groupMessageConsumer := service.NewGroupMessageConsumer(rabbit, instanceQueue, groupRepo, groupCacheService, userCache, wsService.Hub())
 	if err := groupMessageConsumer.Start(consumerCtx); err != nil {
-		log.Fatalf("start group message consumer failed: %v", err)
+		core.Z().Fatalf("start group message consumer failed: %v", err)
 	}
 
 	// MQ 断线自动重连；重连成功后取消旧 consumer，在新通道上重启
@@ -97,7 +97,7 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 		cancelConsumer()
 		consumerCtx, cancelConsumer = context.WithCancel(ctx)
 		if err := groupMessageConsumer.Start(consumerCtx); err != nil {
-			log.Printf("restart group message consumer failed: %v", err)
+			core.Z().Errorf("restart group message consumer failed: %v", err)
 		}
 	})
 

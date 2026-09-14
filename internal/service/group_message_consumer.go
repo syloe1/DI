@@ -4,7 +4,6 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -114,7 +113,7 @@ func (c *GroupMessageConsumer) workerLoop(ctx context.Context, tasks <-chan amqp
 				return
 			}
 			if err := c.handleDelivery(ctx, d); err != nil {
-				log.Printf("consume group message event failed: %v", err)
+				core.Z().Errorf("consume group message event failed: %v", err)
 				core.Metrics.ConsumerFailed.Add(1)
 				_ = d.Nack(false, false)
 				continue
@@ -180,7 +179,7 @@ func (c *GroupMessageConsumer) handleDelivery(ctx context.Context, d amqp091.Del
 	//分片并发推送
 	c.pushShards(ctx, shards, out)
 	if err := c.markDone(ctx, dedupeKey); err != nil {
-		log.Printf("mark consumer event done failed: %v", err)
+		core.Z().Errorf("mark consumer event done failed: %v", err)
 	}
 
 	return nil

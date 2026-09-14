@@ -16,15 +16,22 @@ import (
 )
 
 func main() {
-	appLogger := core.NewLogger()
+	// 加载配置文件（未初始化 logger 前，失败用 core.Z() 兜底输出）
+	cfg, err := config.Load("config/config.yaml")
+	if err != nil {
+		core.Z().Fatalf("load config failed: %v", err)
+	}
+
+	// 初始化结构化日志（zap）：级别/格式来自配置，console 开发 / json 生产
+	if _, err := core.InitLogger(cfg.GetLoggerConfig().Level, cfg.GetLoggerConfig().Format); err != nil {
+		core.Z().Fatalf("init logger failed: %v", err)
+	}
+	appLogger := core.Z()
+	defer core.SyncLogger()
+
 	//注册自定义参数校验器
 	if err := core.RegisterCustomValidators(); err != nil {
 		appLogger.Fatalf("register custom validators failed: %v", err)
-	}
-	// 加载配置文件
-	cfg, err := config.Load("config/config.yaml")
-	if err != nil {
-		appLogger.Fatalf("load config failed: %v", err)
 	}
 
 	db, err := core.InitMysql(cfg.GetMysqlConfig())
@@ -44,16 +51,16 @@ func main() {
 	defer func() { _ = redisClient.Close() }()
 	//异步数据库迁移（golang-migrate，SQL 版本化）
 	go func() {
-		appLogger.Print("start database migration")
+		appLogger.Info("start database migration")
 		if err := core.RunMigrations(db); err != nil {
-			appLogger.Printf("database migration failed: %v", err)
+			appLogger.Errorf("database migration failed: %v", err)
 			return
 		}
-		appLogger.Print("database migration completed")
+		appLogger.Info("database migration completed")
 	}()
 	//依赖注入容器 DI Container
 	appContainer := container.NewContainer(cfg, db, redisClient, appLogger)
-	appLogger.Println("DI container initialized")
+	appLogger.Info("DI container initialized")
 	//初始化路由
 	r := router.InitDependencyInjectionRouter(appContainer)
 
@@ -67,7 +74,7 @@ func main() {
 		Handler: r,
 	}
 	go func() {
-		appLogger.Printf("server started, port: %s", cfg.GetServerConfig().Port)
+		appLogger.Infof("server started, port: %s", cfg.GetServerConfig().Port)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			appLogger.Fatalf("start server failed: %v", err)
 		}
@@ -76,16 +83,16 @@ func main() {
 	// pprof / metrics 独立监听（保留原行为）
 	metricsSrv := &http.Server{Addr: "127.0.0.1:6060", Handler: http.DefaultServeMux}
 	go func() {
-		appLogger.Println("pprof started: http://127.0.0.1:6060/debug/pprof")
+		appLogger.Info("pprof started: http://127.0.0.1:6060/debug/pprof")
 		http.HandleFunc("/metrics", core.MetricsHandler)
 		if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			appLogger.Printf("pprof start failed: %v", err)
+			appLogger.Errorf("pprof start failed: %v", err)
 		}
 	}()
 
 	// 阻塞等待退出信号
 	<-ctx.Done()
-	appLogger.Println("shutting down...")
+	appLogger.Info("shutting down...")
 
 	// 优雅关闭：每步带超时，防止等待排空卡死
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -96,5 +103,5 @@ func main() {
 	_ = metricsSrv.Shutdown(shutdownCtx)
 	// 2. 停 WS / 清在线状态 / 停 outbox+consumer / 关 RabbitMQ
 	appContainer.Shutdown(shutdownCtx)
-	appLogger.Println("shutdown completed")
+	appLogger.Info("shutdown completed")
 }

@@ -16,6 +16,7 @@ type App struct {
 	Redis    RedisConfig    `mapstructure:"redis"`
 	Jwt      JwtConfig      `mapstructure:"jwt"`
 	RabbitMQ RabbitMQConfig `mapstructure:"rabbitmq"`
+	Logger   LoggerConfig   `mapstructure:"logger"`
 }
 
 // =============================================================================
@@ -57,6 +58,13 @@ type RabbitMQConfig struct {
 	URL      string `mapstructure:"url"`
 	Exchange string `mapstructure:"exchange"`
 	Queue    string `mapstructure:"queue"`
+}
+
+// LoggerConfig 结构化日志配置。
+// Level：debug/info/warn/error；Format：console（开发）/ json（生产）。
+type LoggerConfig struct {
+	Level  string `mapstructure:"level"`
+	Format string `mapstructure:"format"`
 }
 
 // =============================================================================
@@ -121,6 +129,15 @@ func (c *JwtConfig) applyDefaults() {
 	}
 }
 
+func (c *LoggerConfig) applyDefaults() {
+	if c.Level == "" {
+		c.Level = "info"
+	}
+	if c.Format == "" {
+		c.Format = "console"
+	}
+}
+
 // =============================================================================
 // 加载
 // =============================================================================
@@ -163,6 +180,7 @@ func (c *App) applyDefaults() {
 	c.Mysql.applyDefaults()
 	c.Redis.applyDefaults()
 	c.Jwt.applyDefaults()
+	c.Logger.applyDefaults()
 }
 
 // =============================================================================
@@ -230,3 +248,4 @@ func (c *App) GetRedisConfig() RedisConfig    { return c.Redis }
 func (c *App) GetServerConfig() ServerConfig  { return c.Server }
 func (c *App) GetJwtConfig() JwtConfig        { return c.Jwt }
 func (c *App) GetCORSOrigins() []string       { return c.Server.CORSOrigins }
+func (c *App) GetLoggerConfig() LoggerConfig  { return c.Logger }

@@ -6,8 +6,8 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"go-admin/pkg/core"
 	"io"
-	"log"
 	"net/http"
 	"sort"
 	"sync"
@@ -39,7 +39,7 @@ func main() {
 	flag.Parse()
 
 	if *mode != "http" && *mode != "ws" {
-		log.Fatalf("invalid mode: %s", *mode)
+		core.Z().Fatalf("invalid mode: %s", *mode)
 	}
 
 	start := time.Now()

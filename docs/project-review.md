@@ -257,7 +257,7 @@ return core.NewBizError(http.StatusNotFound, "post not found")
 
 #### 4.6 日志系统
 
-使用标准库 `log.Logger`，无结构化日志（JSON 格式）、无日志级别、无日志轮转。
+✅ 已改 zap（SugaredLogger）结构化日志：JSON/console 双格式（配置 `logger.format` 切换）、级别控制（配置 `logger.level`：debug/info/warn/error）、ISO8601 时间、请求中间件与 panic recovery 输出结构化字段。剩余可改进：日志轮转/归档（Lumberjack 等）与跨服务 trace_id 注入。
 
 #### 4.7 健康检查
 

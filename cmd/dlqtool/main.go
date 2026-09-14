@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"time"
@@ -28,12 +27,12 @@ func main() {
 	flag.Parse()
 	//限制工具只能运行在 list（查看死信） 和 replay（重放死信）
 	if *mode != "list" && *mode != "replay" {
-		log.Fatalf("invalid mode: %s", *mode)
+		core.Z().Fatalf("invalid mode: %s", *mode)
 	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		log.Fatalf("load config failed: %v", err)
+		core.Z().Fatalf("load config failed: %v", err)
 	}
 	//确定业务队列名
 	fullQueue := strings.TrimSpace(*queue)
@@ -53,7 +52,7 @@ func main() {
 	//初始化并连接 RabbitMQ
 	rabbit, err := core.NewRabbitMQ(cfg.RabbitMQ.URL, cfg.RabbitMQ.Exchange, fmt.Sprintf("%s.%s", fullQueue, fullInstanceID))
 	if err != nil {
-		log.Fatalf("connect rabbitmq failed: %v", err)
+		core.Z().Fatalf("connect rabbitmq failed: %v", err)
 	}
 	defer func() { _ = rabbit.Close() }()
 
@@ -61,11 +60,11 @@ func main() {
 	switch *mode {
 	case "list":
 		if err := listDLQ(ctx, rabbit.ConsumeChan(), fullDLQ, *limit); err != nil {
-			log.Fatalf("list dlq failed: %v", err)
+			core.Z().Fatalf("list dlq failed: %v", err)
 		}
 	case "replay":
 		if err := replayDLQ(ctx, rabbit.ConsumeChan(), rabbit.PublishChan(), cfg.RabbitMQ.Exchange, fullDLQ, *limit); err != nil {
-			log.Fatalf("replay dlq failed: %v", err)
+			core.Z().Fatalf("replay dlq failed: %v", err)
 		}
 	}
 }
@@ -115,12 +114,12 @@ func replayDLQ(ctx context.Context, consumeCh *amqp091.Channel, publishCh *amqp0
 		if err := publishCh.PublishWithContext(ctx, exchange, "", false, false, body); err != nil {
 			// 发布失败：Nack + 重新入队，消息留在死信队列，后续可再次重试
 			_ = msg.Nack(false, true)
-			log.Printf("publish message failed, continue next. err: %v", err)
+			core.Z().Errorf("publish message failed, continue next. err: %v", err)
 			continue
 		}
 		// 发布成功：手动ACK，从死信队列彻底删除该消息
 		if err := msg.Ack(false); err != nil {
-			log.Printf("ack message failed, may cause duplicate msg. err: %v", err)
+			core.Z().Errorf("ack message failed, may cause duplicate msg. err: %v", err)
 			return err
 		}
 		// 打印重放日志

@@ -3,7 +3,6 @@ package core
 // mq客户端
 import (
 	"context"
-	"log"
 	"sync"
 	"time"
 
@@ -156,15 +155,15 @@ func (r *RabbitMQ) RunReconnectLoop(ctx context.Context, onReconnect func()) {
 			if err == nil {
 				return // nil = 主动 Close，不重连
 			}
-			log.Printf("rabbitmq connection lost: %v, retry in %v", err, backoff)
+			Z().Warnf("rabbitmq connection lost: %v, retry in %v", err, backoff)
 			time.Sleep(backoff)
 			backoff = nextReconnectBackoff(backoff)
 			if err := r.connect(); err != nil {
-				log.Printf("rabbitmq reconnect failed: %v", err)
+				Z().Errorf("rabbitmq reconnect failed: %v", err)
 				continue // 失败保持退避，继续
 			}
 			backoff = time.Second // 成功重置退避
-			log.Printf("rabbitmq reconnected")
+			Z().Infof("rabbitmq reconnected")
 			if onReconnect != nil {
 				onReconnect()
 			}

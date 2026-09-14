@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -79,7 +78,7 @@ func (h *WSHub) persistWorker() {
 		case task := <-h.persistCh:
 			if task.msg != nil {
 				if err := h.MessageRepo.CreateMessage(task.msg); err != nil {
-					log.Printf("save message failed: %v", err)
+					core.Z().Errorf("save message failed: %v", err)
 				}
 			} else {
 				_ = h.GroupRepo.CreateGroupMessageWithOutboxBuilder(task.groupMsg,
@@ -188,7 +187,7 @@ func (h *WSHub) registerClient(client *WSClient) {
 		if h.GroupCache != nil {
 			_ = h.GroupCache.AddUserOnlineGroups(h.Ctx, uid)
 		}
-		log.Printf("user %d connected", uid)
+		core.Z().Infof("user %d connected", uid)
 	}()
 }
 
@@ -218,13 +217,13 @@ func (h *WSHub) unregisterClient(client *WSClient) {
 		if h.GroupCache != nil {
 			_ = h.GroupCache.RemoveUserOnlineGroups(h.Ctx, uid)
 		}
-		log.Printf("user %d disconnected", uid)
+		core.Z().Infof("user %d disconnected", uid)
 	}()
 }
 
 // 但websocket客户端发送消息太慢， 主动断开
 func (h *WSHub) dropSlowClient(client *WSClient) {
-	log.Printf("drop slow websocket client user_id=%d", client.UserID)
+	core.Z().Warnf("drop slow websocket client user_id=%d", client.UserID)
 	h.unregisterClient(client)
 }
 
@@ -301,7 +300,7 @@ func (c *WSClient) handleMessage(toUID uint, content string) {
 		return
 	}
 	// if err := c.Hub.MessageRepo.CreateMessage(message); err != nil {
-	// 	log.Printf("save message failed: %v", err)
+	// 	core.Z().Errorf("save message failed: %v", err)
 	// 	return
 	// }
 

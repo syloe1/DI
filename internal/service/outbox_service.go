@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"go-admin/internal/dao"
@@ -56,7 +55,7 @@ func (s *OutboxService) publishDue(ctx context.Context) {
 	items, err := s.repo.ClaimDue(s.batchSize, now,
 		s.claimer, s.claimTTL)
 	if err != nil {
-		log.Printf("list outbox failed: %v", err)
+		core.Z().Errorf("list outbox failed: %v", err)
 		return
 	}
 
@@ -65,14 +64,14 @@ func (s *OutboxService) publishDue(ctx context.Context) {
 			retryCount := item.RetryCount + 1
 			nextRetryAt := time.Now().Add(backoffDuration(retryCount))
 			if markErr := s.repo.MarkFailed(item.ID, retryCount, nextRetryAt, err.Error()); markErr != nil {
-				log.Printf("mark outbox failed (id=%d): %v", item.ID, markErr)
+				core.Z().Errorf("mark outbox failed (id=%d): %v", item.ID, markErr)
 			}
 			core.Metrics.OutboxPublishFailed.Add(1)
 			continue
 		}
 		//db标记为已投递，
 		if markErr := s.repo.MarkPublished(item.ID, time.Now()); markErr != nil {
-			log.Printf("mark outbox published (id=%d): %v", item.ID, markErr)
+			core.Z().Errorf("mark outbox published (id=%d): %v", item.ID, markErr)
 		}
 		core.Metrics.OutboxPublished.Add(1)
 	}
