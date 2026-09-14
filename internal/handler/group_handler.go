@@ -350,7 +350,7 @@ func (h *GroupHandler) GetGroupMessages(c *gin.Context) {
 		core.FailByError(c, err)
 		return
 	}
-	var query dto.GroupMesssageListQuery
+	var query dto.GroupMessageListQuery
 	if err := c.ShouldBindQuery(&query); err != nil {
 		core.FailByError(c, core.ParseBindError(err))
 		return

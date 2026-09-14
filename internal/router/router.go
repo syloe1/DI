@@ -55,6 +55,7 @@ func InitDependencyInjectionRouter(container *container.Container) *gin.Engine {
 
 		// 评论公开查询
 		public.GET("/comment/post/:post_id", container.CommentHandler.GetPostComments)
+		public.GET("/comment/user/:id", container.CommentHandler.GetPublicUserComments)
 
 		// 互动计数
 		public.GET("/interact/count/:post_id", container.InteractHandler.GetInteractCount)

@@ -417,6 +417,17 @@ paths:
         "200":
           $ref: "#/components/responses/OK"
 
+  /comment/user/{id}:
+    get:
+      tags: [Comment]
+      summary: 获取指定用户的评论列表
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/UserID"
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+
   /auth/comment/create:
     post:
       tags: [Comment]

@@ -77,10 +77,7 @@
 - **问题**：数据库模型上挂 HTTP 参数绑定标签，DB 层耦合 HTTP 框架。
 - **建议**：binding 标签全部移到 `dto`，Model 只留 gorm/json 序列化标签。
 
-### [P2-7] 拼写错误 + 未注册路由
-- **位置**：`internal/gateway/sesssion_manager.go`（三连 s）、`internal/dto/group_dto.go`（`GroupMesssageListQuery`）
-- **问题**：文件名/结构体拼写错误；`CommentHandler.GetPublicUserComments` 已实现但路由未注册。
-- **建议**：重命名修正拼写；给 `GetPublicUserComments` 补注册或删除。
+### [P2-7] 拼写错误 + 未注册路由 —— ✅ 已修复（`GroupMesssageListQuery` → `GroupMessageListQuery`；`GetPublicUserComments` 注册为 `GET /comment/user/:id`；`sesssion_manager.go` 已随 gateway 删除）
 
 ---
 

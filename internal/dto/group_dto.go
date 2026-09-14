@@ -25,7 +25,7 @@ type ReviewJoinRequestRequest struct {
 type SendGroupMessageRequest struct {
 	Content string `json:"content" binding:"required"`
 }
-type GroupMesssageListQuery struct {
+type GroupMessageListQuery struct {
 	Page     int `form:"page" binding:"omitempty,min=1"`
 	PageSize int `form:"pageSize" binding:"omitempty,min=1"`
 }
