@@ -20,6 +20,8 @@ type MessageRepository interface {
 	CountUnreadByPeers(userID uint, peerIDs []uint) (map[uint]int64, error)
 	// 断线补偿：增量拉取 id 大于 afterID 的消息（按 id 升序，limit 条）
 	SyncMessages(userID uint, afterID uint, limit int) ([]model.Message, error)
+	// 已读回执：查询 peer 发给 userID 的未读消息 ID（用于标记已读后推送回执）
+	FindUnreadMessageIDs(userID uint, peerID uint) ([]uint, error)
 	DeleteMessage(message *model.Message) error
 
 	// 用户相关方法
@@ -181,6 +183,17 @@ func (r *GormMessageRepository) SyncMessages(userID uint, afterID uint, limit in
 		return nil, err
 	}
 	return messages, nil
+}
+
+// FindUnreadMessageIDs 查询 peerID 发给 userID 的所有未读消息 ID（已读回执推送用）。
+func (r *GormMessageRepository) FindUnreadMessageIDs(userID uint, peerID uint) ([]uint, error) {
+	var ids []uint
+	if err := r.db.Model(&model.Message{}).
+		Where("from_uid = ? AND to_uid = ? AND is_read = false", peerID, userID).
+		Pluck("id", &ids).Error; err != nil {
+		return nil, err
+	}
+	return ids, nil
 }
 
 // DeleteMessage 删除消息（软删除）

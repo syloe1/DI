@@ -59,21 +59,24 @@ type MessageSyncResult struct {
 	HasMore  bool              `json:"has_more"` // 是否还有更多，true 时用 LastID 继续拉
 }
 
+// MessageService 请求链路 Service：ctx 一律方法级传入（Context 反模式修复），不持有请求级上下文。
 type MessageService struct {
 	messageRepo dao.MessageRepository
 	cache       dao.UserCache
-	ctx         context.Context
+	// onMessagesRead 已读回执回调（由 container 注入，避免 Service 循环依赖）：
+	// 参数：senderUID=被读消息的发送方（要通知的人）、readerUID=发起已读的用户、messageIDs=被读消息 ID 列表。
+	onMessagesRead func(senderUID uint, readerUID uint, messageIDs []uint)
 }
 
-func NewMessageService(messageRepo dao.MessageRepository, cache dao.UserCache, ctx context.Context) *MessageService {
+func NewMessageService(messageRepo dao.MessageRepository, cache dao.UserCache, onMessagesRead func(uint, uint, []uint)) *MessageService {
 	return &MessageService{
-		messageRepo: messageRepo,
-		cache:       cache,
-		ctx:         ctx,
+		messageRepo:    messageRepo,
+		cache:          cache,
+		onMessagesRead: onMessagesRead,
 	}
 }
 
-func (s *MessageService) GetConversations(userID uint) ([]ConversationItem, error) {
+func (s *MessageService) GetConversations(ctx context.Context, userID uint) ([]ConversationItem, error) {
 	conversations, err := s.messageRepo.GetConversations(userID)
 	if err != nil {
 		return nil, core.NewBizError(http.StatusInternalServerError, "get conversations failed")
@@ -117,7 +120,7 @@ func (s *MessageService) GetConversations(userID uint) ([]ConversationItem, erro
 	return result, nil
 }
 
-func (s *MessageService) GetMessageList(userID uint, peerID uint, page int, pageSize int) (*MessageListResult, error) {
+func (s *MessageService) GetMessageList(ctx context.Context, userID uint, peerID uint, page int, pageSize int) (*MessageListResult, error) {
 	page, pageSize = normalizePagination(page, pageSize, 1, 20)
 	offset := (page - 1) * pageSize
 
@@ -131,8 +134,18 @@ func (s *MessageService) GetMessageList(userID uint, peerID uint, page int, page
 		return nil, core.NewBizError(http.StatusInternalServerError, "get messages failed")
 	}
 
-	if err := s.messageRepo.MarkMessagesAsRead(userID, peerID); err != nil {
-		fmt.Printf("mark messages as read failed: %v\n", err)
+	// 标记已读 + 已读回执：先查出本次从未读→已读的消息 ID，再通知对方
+	unreadIDs, err := s.messageRepo.FindUnreadMessageIDs(userID, peerID)
+	if err != nil {
+		return nil, core.NewBizError(http.StatusInternalServerError, "query unread messages failed")
+	}
+	if len(unreadIDs) > 0 {
+		if err := s.messageRepo.MarkMessagesAsRead(userID, peerID); err != nil {
+			fmt.Printf("mark messages as read failed: %v\n", err)
+		}
+		if s.onMessagesRead != nil {
+			s.onMessagesRead(peerID, userID, unreadIDs)
+		}
 	}
 
 	result := make([]MessageListItem, 0, len(messages))
@@ -159,7 +172,7 @@ func (s *MessageService) GetMessageList(userID uint, peerID uint, page int, page
 	}, nil
 }
 
-func (s *MessageService) SyncMessages(userID uint, afterID uint, limit int) (*MessageSyncResult, error) {
+func (s *MessageService) SyncMessages(ctx context.Context, userID uint, afterID uint, limit int) (*MessageSyncResult, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -200,7 +213,7 @@ func (s *MessageService) SyncMessages(userID uint, afterID uint, limit int) (*Me
 	}, nil
 }
 
-func (s *MessageService) SendMessage(userID uint, toUID uint, content string) (*SendMessageResult, error) {
+func (s *MessageService) SendMessage(ctx context.Context, userID uint, toUID uint, content string) (*SendMessageResult, error) {
 	toUser, err := s.messageRepo.FindUserByID(toUID)
 	if err != nil {
 		return nil, core.NewBizError(http.StatusNotFound, "target user not found")
@@ -210,7 +223,7 @@ func (s *MessageService) SendMessage(userID uint, toUID uint, content string) (*
 		return nil, core.NewBizError(http.StatusBadRequest, "cannot send message to yourself")
 	}
 
-	duplicate, err := s.checkDuplicateSubmit(userID, toUID, content)
+	duplicate, err := s.checkDuplicateSubmit(ctx, userID, toUID, content)
 	if err != nil {
 		return nil, core.NewBizError(http.StatusInternalServerError, "duplicate submit check failed")
 	}
@@ -241,7 +254,7 @@ func (s *MessageService) SendMessage(userID uint, toUID uint, content string) (*
 	}, nil
 }
 
-func (s *MessageService) DeleteMessage(userID uint, messageIDStr string) error {
+func (s *MessageService) DeleteMessage(ctx context.Context, userID uint, messageIDStr string) error {
 	messageID, err := strconv.ParseUint(messageIDStr, 10, 32)
 	if err != nil {
 		return core.NewBizError(http.StatusBadRequest, "invalid message id")
@@ -263,9 +276,9 @@ func (s *MessageService) DeleteMessage(userID uint, messageIDStr string) error {
 	return nil
 }
 
-func (s *MessageService) checkDuplicateSubmit(userID uint, toUID uint, content string) (bool, error) {
+func (s *MessageService) checkDuplicateSubmit(ctx context.Context, userID uint, toUID uint, content string) (bool, error) {
 	key := fmt.Sprintf("duplicate:message:%d:%d:%s", userID, toUID, hashPayload(content))
-	ok, err := s.cache.SetNX(s.ctx, key, "1", messageDuplicateSubmitTTL)
+	ok, err := s.cache.SetNX(ctx, key, "1", messageDuplicateSubmitTTL)
 	if err != nil {
 		return false, err
 	}

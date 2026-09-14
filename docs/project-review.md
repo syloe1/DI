@@ -21,11 +21,10 @@
 | 缓存 / 状态 | Redis | 8.x | ⭐⭐⭐⭐⭐ |
 | 消息队列 | RabbitMQ | amqp091-go v1.11.0 | ⭐⭐⭐⭐ |
 | WebSocket | gorilla/websocket | v1.5.3 | ⭐⭐⭐⭐⭐ |
-| QUIC | quic-go | v0.59.1 | ⭐⭐⭐ 新兴 |
 | 认证 | golang-jwt | v4.5.2 | ⭐⭐⭐⭐⭐ |
 | 配置 | Viper | v1.21.0 | ⭐⭐⭐⭐ |
 
-**依赖冗余**：项目中同时存在 `streadway/amqp`（已废弃）和 `rabbitmq/amqp091-go`（官方替代），本应只保留后者。
+**依赖说明**：`streadway/amqp`（已废弃）已移除，统一使用官方 `rabbitmq/amqp091-go`；`quic-go` 为 Gin v1.12.0 的传递依赖（indirect），非主动引入。
 
 ### 3. 已完成功能清单
 
@@ -44,13 +43,15 @@
 | **中间件** | JWT 认证、令牌桶限流、CORS、Request ID、日志、Panic 恢复 | 80% |
 | **在线状态** | Redis + Lua 原子操作、心跳续期、服务停机自动清理 | 90% |
 
-#### ⚠️ 已实现但未接入
+#### ⚠️ 已实现但未接入（已清理）
+
+> 以下模块已在 S0 阶段确认删除：QUIC 网关、ChatService、ConsumerPool（详见顶部 ✅ 修复记录）。
 
 | 模块 | 说明 |
 |------|------|
-| **QUIC 网关** | `gateway/quic_server.go` 等完整实现，但 `container.go` 和 `router.go` 未引用 |
-| **ChatService** | `service/chat_service.go` 完整实现，未注入容器 |
-| **ConsumerPool** | `mq/consumer_pool.go` 使用旧 AMQP 库实现，未被使用 |
+| ~~QUIC 网关~~ | ~~`gateway/quic_server.go` 等完整实现，但 `container.go` 和 `router.go` 未引用~~ ✅ 已删除 |
+| ~~ChatService~~ | ~~`service/chat_service.go` 完整实现，未注入容器~~ ✅ 已删除 |
+| ~~ConsumerPool~~ | ~~`mq/consumer_pool.go` 使用旧 AMQP 库实现，未被使用~~ ✅ 已删除 |
 | **WSService 方法** | `BroadcastMessage`、`GetOnlineUsers`、`Shutdown` 已定义但从未调用 |
 | **CommentHandler.GetPublicUserComments** | 方法已写，路由未注册 |
 
@@ -87,12 +88,9 @@ f:\DI/
 │   ├── dao/                    # 10+ 个 dao（数据访问，含接口+实现）
 │   ├── domain/model/           # 12 个 model（GORM 实体）
 │   ├── dto/                    # 请求/响应 DTO
-│   ├── gateway/                # QUIC 网关（已实现未接入）
 │   ├── middleware/              # 5 个中间件
-│   └── mq/                     # MQ 消费池（旧版实现，未使用）
 ├── pkg/
-│   ├── core/                   # 基础能力（DB/Redis/MQ/Logger/Metrics）
-│   └── utils/snowflake.go      # 雪花 ID 生成（预留，NextID 全项目未被调用）
+│   ├── core/                   # 基础能力（DB/Redis/MQ/Logger/Metrics/错误处理）
 ├── docs/                       # 文档目录
 ├── deploy/monitoring/          # Prometheus + Grafana 监控栈
 ├── js/                         # 前端静态文件（含 5.5MB 测试图片）
@@ -175,15 +173,11 @@ func (s *PostService) GetPost(ctx context.Context, id uint) (*Post, error) {
 
 影响：HTTP 请求的 deadline 无法传递到下游 DB/Redis 调用，无法实现请求级超时控制。
 
-#### 1.4 QUIC 网关"僵尸代码"
+#### 1.4 QUIC 网关"僵尸代码" —— ✅ 已移除
 
-`internal/gateway/` 下 ~500 行完整实现的 QUIC 网关代码，包含：
-- `QUICServer`（会话管理、互踢、心跳、在线状态同步）
-- `QUICSession`（多 Stream 读写、认证、超时）
-- `RedisPresenceAdapter`（PresenceStore 接口适配器）
-- `SessionManager`（统一会话接口）
+`internal/gateway/` 下 ~500 行完整实现的 QUIC 网关代码（QUICServer / QUICSession / RedisPresenceAdapter / SessionManager），`container.go` 和 `main.go` 中**完全没有引用**，属于实现了但从未接入的死代码。同样情况的 `mq/consumer_pool.go` 和 `service/chat_service.go`。
 
-但 `container.go` 和 `main.go` 中**完全没有引用**，属于实现了但从未接入的死代码。同样的情况还有 `mq/consumer_pool.go` 和 `service/chat_service.go`。
+**处置（S0）**：三处全部删除，`go.mod` 清理 `streadway/amqp`；QUIC 鉴权弱、无客户端可演示、与主链路割裂，保留无收益。实时通信统一走 WebSocket + 断线消息补偿。
 
 ### 二、代码规范问题
 
@@ -302,13 +296,13 @@ return core.NewBizError(http.StatusNotFound, "post not found")
 ☐ 扩展 .gitignore（.idea/, *.log, *.exe, config/config.yaml, mysql-data/ 等）
 ```
 
-#### Sprint 2：填坑 — 清理死代码 & 接入未使用模块
+#### Sprint 2：填坑 — 清理死代码 & 接入未使用模块（已完成 ✅）
 
 ```
-☐ 删除或接入 internal/mq/consumer_pool.go（二选一）
-☐ 删除或接入 internal/service/chat_service.go（二选一）
-☐ 清理 streadway/amqp 废弃依赖
-☐ 接入 QUIC 网关 → container.go 中实例化，提供独立端口
+☑ 删除 internal/mq/consumer_pool.go（含旧 AMQP 依赖清理）
+☑ 删除 internal/service/chat_service.go
+☑ 清理 streadway/amqp 废弃依赖
+☑ 删除 QUIC 网关 internal/gateway/（鉴权弱 + 无客户端，做减法）
 ☐ 给 CommentHandler.GetPublicUserComments 注册路由
 ☐ 修复拼写错误（sesssion → session，Messsage → Message）
 ```
@@ -395,18 +389,16 @@ return core.NewBizError(http.StatusNotFound, "post not found")
 如果将此项目用于毕业设计，建议聚焦一个**技术深度点**：
 
 ```
-选题建议：「基于 QUIC 协议的弱网环境实时通信系统设计与实现」
+选题建议：「基于消息可靠性设计的实时 IM 系统：Outbox + 断线补偿」
 
 论文可展开的点：
-  - WebSocket vs QUIC 在丢包率 5%/10%/20% 下的性能对比
-  - 0-RTT 握手机制在移动网络切换场景下的优势
-  - 多路复用 Stream 的信道利用率分析
-  - Outbox 模式在分布式系统中的可靠投递保证
+  - Transaction Outbox 模式在分布式系统中的可靠投递保证
+  - 断线消息补偿：游标增量同步 + 幂等去重（WS 先推后补）
   - 分片缓存 + Lua 原子操作的在线状态一致性保证
+  - RabbitMQ 断线重连与指数退避
 
 补充工作：
-  - 编写 QUIC 客户端（移动端或 CLI）
-  - 设计可控弱网环境（tc netem）进行对比实验
+  - 弱网实验（tc netem 模拟丢包/抖动），对比补偿前后消息丢失率
   - 收集性能数据绘图表
   - 撰写论文（背景→相关工作→系统设计→实验评估→结论）
 ```
@@ -459,7 +451,7 @@ return core.NewBizError(http.StatusNotFound, "post not found")
 | `dao/` | 4 | 错误吞掉、LIKE 无法用索引、接口泄漏 GORM 类型 |
 | `middleware/` | 4 | 令牌桶泄漏、CORS 反射、硬编码角色 |
 | `model/` | 2 | Gin 标签泄漏、Password JSON 标签错误 |
-| `gateway/` | 1 | QUIC 代码完全未接入 |
+| ~~`gateway/`~~ | 1 | ~~QUIC 代码完全未接入~~ ✅ 已删除 |
 | `pkg/core/` | 3 | MQ 无重连、配置无默认值、错误消息泄漏 |
 | `config/` | 2 | 明文密码入 Git、缺失配置校验 |
 | `Dockerfile/compose` | 4 | Go 版本号不确定、弱密码、端口暴露、健康检查 |
@@ -471,11 +463,12 @@ return core.NewBizError(http.StatusNotFound, "post not found")
 
 ---
 
-## 更新记录（2026-09-10 同步）
+## 更新记录（2026-09-14 同步）
 
 本次对照当前代码修正以下过时结论：
 
 - ✅ 4 项 CRITICAL 已在当前代码中修复：WebSocket CheckOrigin 白名单、RWMutex 慢客户端死锁、BroadcastMessage channel 二次 close panic、User.Password JSON 标签。
-- `pkg/utils/snowflake.go` 为**预留代码**，`NextID()` 全项目无调用，所有 ID 实际为数据库自增（详见 `面试.md` 坑 1）。
+- ✅ S0 收尾：删除 `pkg/utils/snowflake.go`、`internal/gateway/`（QUIC）、`internal/service/chat_service.go`、`internal/mq/consumer_pool.go`；清理 `streadway/amqp`。
+- ✅ S0 工程化：优雅关闭（SIGTERM → Shutdown）、RabbitMQ 断线重连（指数退避）、统一错误处理（不泄漏内部错误、DAO 吞错修复）、会话列表 N+1 修复（批量 IN + GROUP BY）、断线消息补偿 sync 接口。
 - `config.docker.yaml` 已改为 `config.example.yaml`（支持 `APP_*` 环境变量覆盖）。
-- 其余 HIGH/MEDIUM 问题（无优雅关闭、RabbitMQ 无重连、CORS 反射 Origin、令牌桶内存泄漏、N+1、无测试、QUIC/ChatService/ConsumerPool 未接入等）截至本次同步**仍存在**。
+- 其余 HIGH/MEDIUM 问题（CORS 反射 Origin、JWT 经 URL Query、令牌桶内存泄漏、健康检查缺失、Context 反模式、无测试、无迁移管理等）仍待 S1-S3 处理。

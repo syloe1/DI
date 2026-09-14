@@ -219,3 +219,41 @@ func routeKey(uid string) string {
 func instanceUsersKey(instanceID string) string {
 	return fmt.Sprintf("instance:%s:users", instanceID)
 }
+
+// ======================
+// 查询（S2-11：在线状态唯一来源）
+// ======================
+
+// IsOnline 查询用户是否在线（权威来源：Redis online:uid，带 TTL，由 WS 心跳续期）。
+func (s *PresenceService) IsOnline(ctx context.Context, userID uint) (bool, error) {
+	if s == nil || s.client == nil {
+		return false, nil
+	}
+	n, err := s.client.Exists(ctx, onlineKey(strconv.FormatUint(uint64(userID), 10))).Result()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// GetOnlineUserIDs 返回本实例的在线用户 ID。
+// 说明：presence 按实例维护集合（instance:{id}:users），跨实例汇总需在注册时维护全局索引，
+// 当前单实例部署下即为全量在线用户（多实例时由网关/路由层汇总，这里不做跨实例扫描）。
+func (s *PresenceService) GetOnlineUserIDs(ctx context.Context) ([]uint, error) {
+	if s == nil || s.client == nil {
+		return []uint{}, nil
+	}
+	members, err := s.client.SMembers(ctx, instanceUsersKey(s.instanceID)).Result()
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]uint, 0, len(members))
+	for _, m := range members {
+		id64, err := strconv.ParseUint(m, 10, 64)
+		if err != nil {
+			continue
+		}
+		ids = append(ids, uint(id64))
+	}
+	return ids, nil
+}

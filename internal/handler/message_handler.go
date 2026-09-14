@@ -17,7 +17,7 @@ func NewMessageHandler(svc *service.MessageService) *MessageHandler {
 }
 
 func (h *MessageHandler) GetConversations(c *gin.Context) {
-	data, err := h.svc.GetConversations(c.GetUint("userID"))
+	data, err := h.svc.GetConversations(c.Request.Context(), c.GetUint("userID"))
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -32,7 +32,7 @@ func (h *MessageHandler) GetMessageList(c *gin.Context) {
 		return
 	}
 
-	data, err := h.svc.GetMessageList(c.GetUint("userID"), query.PeerID, query.Page, query.PageSize)
+	data, err := h.svc.GetMessageList(c.Request.Context(), c.GetUint("userID"), query.PeerID, query.Page, query.PageSize)
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -48,7 +48,7 @@ func (h *MessageHandler) SyncMessages(c *gin.Context) {
 		return
 	}
 
-	data, err := h.svc.SyncMessages(c.GetUint("userID"), query.AfterID, query.Limit)
+	data, err := h.svc.SyncMessages(c.Request.Context(), c.GetUint("userID"), query.AfterID, query.Limit)
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -63,7 +63,7 @@ func (h *MessageHandler) SendMessage(c *gin.Context) {
 		return
 	}
 
-	data, err := h.svc.SendMessage(c.GetUint("userID"), req.ToUID, req.Content)
+	data, err := h.svc.SendMessage(c.Request.Context(), c.GetUint("userID"), req.ToUID, req.Content)
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -72,7 +72,7 @@ func (h *MessageHandler) SendMessage(c *gin.Context) {
 }
 
 func (h *MessageHandler) DeleteMessage(c *gin.Context) {
-	if err := h.svc.DeleteMessage(c.GetUint("userID"), c.Param("id")); err != nil {
+	if err := h.svc.DeleteMessage(c.Request.Context(), c.GetUint("userID"), c.Param("id")); err != nil {
 		core.FailByError(c, err)
 		return
 	}

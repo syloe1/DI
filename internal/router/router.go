@@ -2,8 +2,11 @@ package router
 
 //router-api
 import (
+	"net/http"
+
 	"go-admin/internal/container"
 	"go-admin/internal/middleware"
+	"go-admin/pkg/core"
 
 	"github.com/gin-gonic/gin"
 )
@@ -15,11 +18,29 @@ func InitDependencyInjectionRouter(container *container.Container) *gin.Engine {
 	r.Use(middleware.RequestID())
 	r.Use(middleware.RequestLogger(container.Logger))
 	r.Use(middleware.CustomRecovery(container.Logger))
-	r.Use(middleware.Cors())
+	r.Use(middleware.Cors(container.Config.GetCORSOrigins()))
 
 	// ========== 1. 公开路由组：无需登录 ==========
 	public := r.Group("/")
 	{
+		// 健康检查（Docker healthcheck / 负载均衡探活）
+		public.GET("/healthz", func(c *gin.Context) { core.Success(c, gin.H{"status": "ok"}) })
+		public.GET("/readyz", func(c *gin.Context) {
+			if err := container.DB.Exec("SELECT 1").Error; err != nil {
+				core.Fail(c, http.StatusServiceUnavailable, "mysql not ready")
+				return
+			}
+			if err := container.Redis.Ping(c.Request.Context()).Err(); err != nil {
+				core.Fail(c, http.StatusServiceUnavailable, "redis not ready")
+				return
+			}
+			if container.Rabbit == nil || container.Rabbit.PublishChan() == nil || container.Rabbit.PublishChan().IsClosed() {
+				core.Fail(c, http.StatusServiceUnavailable, "rabbitmq not ready")
+				return
+			}
+			core.Success(c, gin.H{"status": "ok"})
+		})
+
 		// 用户登录注册
 		public.POST("/user/register", middleware.RateLimit("register", 1.0/30.0, 2, middleware.ClientIPKey), container.UserHandler.Register)
 		public.POST("/user/login", middleware.RateLimit("login", 1, 5, middleware.ClientIPKey), container.UserHandler.Login)

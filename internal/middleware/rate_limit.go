@@ -24,8 +24,36 @@ type inMemoryLimiter struct {
 	buckets map[string]*tokenBucket
 }
 
-var defaultLimiter = &inMemoryLimiter{
-	buckets: make(map[string]*tokenBucket),
+// P1-3 修复：限制器持有后台清理 goroutine，
+// 定期删除超过 expireAfter 未访问的 bucket，避免 map 只增不减导致内存泄漏。
+const (
+	limiterCleanupInterval = 10 * time.Minute
+	limiterExpireAfter     = 10 * time.Minute
+)
+
+func newInMemoryLimiter() *inMemoryLimiter {
+	l := &inMemoryLimiter{
+		buckets: make(map[string]*tokenBucket),
+	}
+	go l.cleanupLoop()
+	return l
+}
+
+var defaultLimiter = newInMemoryLimiter()
+
+func (l *inMemoryLimiter) cleanupLoop() {
+	ticker := time.NewTicker(limiterCleanupInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		l.mu.Lock()
+		now := time.Now()
+		for key, b := range l.buckets {
+			if now.Sub(b.lastRefill) > limiterExpireAfter {
+				delete(l.buckets, key)
+			}
+		}
+		l.mu.Unlock()
+	}
 }
 
 func RateLimit(name string, rate float64, capacity int, keyFunc func(*gin.Context) (string, bool)) gin.HandlerFunc {

@@ -1,13 +1,15 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	"go-admin/internal/domain/model"
 )
 
-const OnlineUsersKey = "user:online"
+// 在线状态统一由 PresenceService 管理（Redis online:uid + TTL + 心跳续期），
+// 不再使用独立的 user:online Set（S2-11 唯一来源）。
 
 func userProfileCacheKey(userID uint) string {
 	return fmt.Sprintf("user:profile:%d", userID)
@@ -25,11 +27,11 @@ func buildSafeUserProfile(user *model.User) map[string]interface{} {
 	}
 }
 
-func (s *UserService) cacheUserProfile(user *model.User) {
+func (s *UserService) cacheUserProfile(ctx context.Context, user *model.User) {
 	if user == nil || user.ID == 0 {
 		return
 	}
-	_ = s.cache.HSet(s.ctx, userProfileCacheKey(user.ID), map[string]interface{}{
+	_ = s.cache.HSet(ctx, userProfileCacheKey(user.ID), map[string]interface{}{
 		"id":         user.ID,
 		"username":   user.Username,
 		"role":       user.Role,
@@ -37,15 +39,15 @@ func (s *UserService) cacheUserProfile(user *model.User) {
 	})
 }
 
-func (s *UserService) deleteUserProfileCache(userID uint) {
+func (s *UserService) deleteUserProfileCache(ctx context.Context, userID uint) {
 	if userID == 0 {
 		return
 	}
-	_ = s.cache.Del(s.ctx, userProfileCacheKey(userID), fmt.Sprintf("user:%d", userID))
+	_ = s.cache.Del(ctx, userProfileCacheKey(userID), fmt.Sprintf("user:%d", userID))
 }
 
-func (s *UserService) getCachedUserProfile(userID uint) (map[string]interface{}, bool) {
-	values, err := s.cache.HGetAll(s.ctx, userProfileCacheKey(userID))
+func (s *UserService) getCachedUserProfile(ctx context.Context, userID uint) (map[string]interface{}, bool) {
+	values, err := s.cache.HGetAll(ctx, userProfileCacheKey(userID))
 	if err != nil || len(values) == 0 {
 		return nil, false
 	}
@@ -57,9 +59,6 @@ func (s *UserService) getCachedUserProfile(userID uint) (map[string]interface{},
 	}
 	if createdAt := values["created_at"]; createdAt != "" {
 		profile["created_at"] = createdAt
-	}
-	if online, err := s.cache.SIsMember(s.ctx, OnlineUsersKey, userID); err == nil {
-		profile["is_online"] = online
 	}
 	return profile, true
 }

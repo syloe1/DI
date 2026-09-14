@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"go-admin/config"
 	"go-admin/internal/dao"
@@ -75,11 +76,13 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 	outboxService := service.NewOutboxService(outboxRepo, groupMessagePublisher, instanceID)
 	outboxService.Start(ctx)
 
-	userService := service.NewUserService(userDB, userCache, jwtCfg, jwtSecret, ctx)
+	userService := service.NewUserService(userDB, userCache, jwtCfg, jwtSecret, presenceService)
 	userHandler := handler.NewUserHandler(userService)
-	postService := service.NewPostService(postRepo, userCache, ctx)
+	postService := service.NewPostService(postRepo, userCache)
 	postHandler := handler.NewPostHandler(postService)
 	wsService := service.NewWSService(messageRepo, groupRepo, groupMessagePublisher, presenceService, groupCacheService, userCache, ctx, jwtSecret)
+	// 用户角色/权限变更 → 强制断开其 WS（踢下线），presence 随之清理在线状态
+	userService.SetOnUserKicked(func(userID uint) { wsService.KickUser(userID) })
 	wsHandler := handler.NewWSHandler(wsService)
 
 	// consumer 使用独立 ctx：优雅关闭和 MQ 重连时取消并重启
@@ -100,11 +103,21 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 
 	commentService := service.NewCommentService(commentRepo)
 	commentHandler := handler.NewCommentHandler(commentService)
-	messageService := service.NewMessageService(messageRepo, userCache, ctx)
+	// 已读回执：sender 发给 reader 的消息被 reader 已读后，给 sender 推 WS 事件 "message.read"
+	messageService := service.NewMessageService(messageRepo, userCache, func(senderUID uint, readerUID uint, messageIDs []uint) {
+		wsService.SendToUser(senderUID, map[string]interface{}{
+			"type": "message.read",
+			"data": map[string]interface{}{
+				"peer_uid":    readerUID,
+				"message_ids": messageIDs,
+				"read_at":     time.Now(),
+			},
+		})
+	})
 	messageHandler := handler.NewMessageHandler(messageService)
 	socialService := service.NewSocialService(socialRepo)
 	socialHandler := handler.NewSocialHandler(socialService)
-	interactService := service.NewInteractService(interactRepo, userCache, ctx)
+	interactService := service.NewInteractService(interactRepo, userCache)
 	interactHandler := handler.NewInteractHandler(interactService)
 	groupService := service.NewGroupService(groupRepo)
 	groupHandler := handler.NewGroupHandler(groupService)

@@ -24,21 +24,20 @@ type InteractActionResult struct {
 	Message string `json:"message"`
 }
 
+// InteractService 请求链路 Service：ctx 一律方法级传入，不持有请求级上下文。
 type InteractService struct {
 	interactRepo dao.InteractRepository
 	cache        dao.UserCache
-	ctx          context.Context
 }
 
-func NewInteractService(interactRepo dao.InteractRepository, cache dao.UserCache, ctx context.Context) *InteractService {
+func NewInteractService(interactRepo dao.InteractRepository, cache dao.UserCache) *InteractService {
 	return &InteractService{
 		interactRepo: interactRepo,
 		cache:        cache,
-		ctx:          ctx,
 	}
 }
 
-func (s *InteractService) ToggleLike(userID uint, postIDStr string) (*InteractActionResult, error) {
+func (s *InteractService) ToggleLike(ctx context.Context, userID uint, postIDStr string) (*InteractActionResult, error) {
 	postID, err := parsePostID(postIDStr)
 	if err != nil {
 		return nil, err
@@ -85,15 +84,15 @@ func (s *InteractService) ToggleLike(userID uint, postIDStr string) (*InteractAc
 	}
 
 	if liked {
-		s.bumpPostHotScore(postID, postHotScoreLike)
+		s.bumpPostHotScore(ctx, postID, postHotScoreLike)
 		return &InteractActionResult{Status: true, Message: "like success"}, nil
 	}
 
-	s.bumpPostHotScore(postID, -postHotScoreLike)
+	s.bumpPostHotScore(ctx, postID, -postHotScoreLike)
 	return &InteractActionResult{Status: false, Message: "cancel like success"}, nil
 }
 
-func (s *InteractService) ToggleDislike(userID uint, postIDStr string) (*InteractActionResult, error) {
+func (s *InteractService) ToggleDislike(ctx context.Context, userID uint, postIDStr string) (*InteractActionResult, error) {
 	postID, err := parsePostID(postIDStr)
 	if err != nil {
 		return nil, err
@@ -143,7 +142,7 @@ func (s *InteractService) ToggleDislike(userID uint, postIDStr string) (*Interac
 	return &InteractActionResult{Status: false, Message: "cancel dislike success"}, nil
 }
 
-func (s *InteractService) ToggleCollect(userID uint, postIDStr string) (*InteractActionResult, error) {
+func (s *InteractService) ToggleCollect(ctx context.Context, userID uint, postIDStr string) (*InteractActionResult, error) {
 	postID, err := parsePostID(postIDStr)
 	if err != nil {
 		return nil, err
@@ -181,15 +180,15 @@ func (s *InteractService) ToggleCollect(userID uint, postIDStr string) (*Interac
 	}
 
 	if collected {
-		s.bumpPostHotScore(postID, postHotScoreCollect)
+		s.bumpPostHotScore(ctx, postID, postHotScoreCollect)
 		return &InteractActionResult{Status: true, Message: "collect success"}, nil
 	}
 
-	s.bumpPostHotScore(postID, -postHotScoreCollect)
+	s.bumpPostHotScore(ctx, postID, -postHotScoreCollect)
 	return &InteractActionResult{Status: false, Message: "cancel collect success"}, nil
 }
 
-func (s *InteractService) Share(userID uint, postIDStr string) (*InteractActionResult, error) {
+func (s *InteractService) Share(ctx context.Context, userID uint, postIDStr string) (*InteractActionResult, error) {
 	postID, err := parsePostID(postIDStr)
 	if err != nil {
 		return nil, err
@@ -206,11 +205,11 @@ func (s *InteractService) Share(userID uint, postIDStr string) (*InteractActionR
 		return nil, core.NewBizError(http.StatusInternalServerError, "share failed")
 	}
 
-	s.bumpPostHotScore(postID, postHotScoreShare)
+	s.bumpPostHotScore(ctx, postID, postHotScoreShare)
 	return &InteractActionResult{Message: "share success"}, nil
 }
 
-func (s *InteractService) GetInteractStatus(userID uint, postIDStr string) (map[string]interface{}, error) {
+func (s *InteractService) GetInteractStatus(ctx context.Context, userID uint, postIDStr string) (map[string]interface{}, error) {
 	postID, err := parsePostID(postIDStr)
 	if err != nil {
 		return nil, err
@@ -223,7 +222,7 @@ func (s *InteractService) GetInteractStatus(userID uint, postIDStr string) (map[
 	return status, nil
 }
 
-func (s *InteractService) GetInteractCount(postIDStr string) (map[string]int64, error) {
+func (s *InteractService) GetInteractCount(ctx context.Context, postIDStr string) (map[string]int64, error) {
 	postID, err := parsePostID(postIDStr)
 	if err != nil {
 		return nil, err
@@ -236,11 +235,11 @@ func (s *InteractService) GetInteractCount(postIDStr string) (map[string]int64, 
 	return counts, nil
 }
 
-func (s *InteractService) bumpPostHotScore(postID uint, delta float64) {
+func (s *InteractService) bumpPostHotScore(ctx context.Context, postID uint, delta float64) {
 	if s.cache == nil || postID == 0 || delta == 0 {
 		return
 	}
-	_, _ = s.cache.ZIncrBy(s.ctx, postHotRankKey, delta, fmt.Sprintf("%d", postID))
+	_, _ = s.cache.ZIncrBy(ctx, postHotRankKey, delta, fmt.Sprintf("%d", postID))
 }
 
 func parsePostID(postIDStr string) (uint, error) {

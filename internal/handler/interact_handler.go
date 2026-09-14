@@ -16,7 +16,7 @@ func NewInteractHandler(svc *service.InteractService) *InteractHandler {
 }
 
 func (h *InteractHandler) ToggleLike(c *gin.Context) {
-	data, err := h.svc.ToggleLike(c.GetUint("userID"), c.Param("post_id"))
+	data, err := h.svc.ToggleLike(c.Request.Context(), c.GetUint("userID"), c.Param("post_id"))
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -25,7 +25,7 @@ func (h *InteractHandler) ToggleLike(c *gin.Context) {
 }
 
 func (h *InteractHandler) ToggleDislike(c *gin.Context) {
-	data, err := h.svc.ToggleDislike(c.GetUint("userID"), c.Param("post_id"))
+	data, err := h.svc.ToggleDislike(c.Request.Context(), c.GetUint("userID"), c.Param("post_id"))
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -34,7 +34,7 @@ func (h *InteractHandler) ToggleDislike(c *gin.Context) {
 }
 
 func (h *InteractHandler) ToggleCollect(c *gin.Context) {
-	data, err := h.svc.ToggleCollect(c.GetUint("userID"), c.Param("post_id"))
+	data, err := h.svc.ToggleCollect(c.Request.Context(), c.GetUint("userID"), c.Param("post_id"))
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -43,7 +43,7 @@ func (h *InteractHandler) ToggleCollect(c *gin.Context) {
 }
 
 func (h *InteractHandler) Share(c *gin.Context) {
-	data, err := h.svc.Share(c.GetUint("userID"), c.Param("post_id"))
+	data, err := h.svc.Share(c.Request.Context(), c.GetUint("userID"), c.Param("post_id"))
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -52,7 +52,7 @@ func (h *InteractHandler) Share(c *gin.Context) {
 }
 
 func (h *InteractHandler) GetInteractStatus(c *gin.Context) {
-	data, err := h.svc.GetInteractStatus(c.GetUint("userID"), c.Param("post_id"))
+	data, err := h.svc.GetInteractStatus(c.Request.Context(), c.GetUint("userID"), c.Param("post_id"))
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -61,7 +61,7 @@ func (h *InteractHandler) GetInteractStatus(c *gin.Context) {
 }
 
 func (h *InteractHandler) GetInteractCount(c *gin.Context) {
-	data, err := h.svc.GetInteractCount(c.Param("post_id"))
+	data, err := h.svc.GetInteractCount(c.Request.Context(), c.Param("post_id"))
 	if err != nil {
 		core.FailByError(c, err)
 		return

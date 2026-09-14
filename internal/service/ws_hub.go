@@ -182,9 +182,6 @@ func (h *WSHub) registerClient(client *WSClient) {
 			core.Metrics.OnlineConnections.Add(1)
 		}
 
-		if h.Cache != nil {
-			_ = h.Cache.SAdd(h.Ctx, OnlineUsersKey, uid)
-		}
 		if h.Presence != nil {
 			_ = h.Presence.RegisterOnline(h.Ctx, uid)
 		}
@@ -215,9 +212,6 @@ func (h *WSHub) unregisterClient(client *WSClient) {
 	go func() {
 		core.Metrics.OnlineConnections.Add(-1)
 
-		if h.Cache != nil {
-			_ = h.Cache.SRem(h.Ctx, OnlineUsersKey, uid)
-		}
 		if h.Presence != nil {
 			_ = h.Presence.UnregisterOnline(h.Ctx, uid)
 		}

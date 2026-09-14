@@ -26,7 +26,7 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 		return
 	}
 
-	duplicate, err := h.svc.CheckDuplicateSubmit(c.GetUint("userID"), req.Title, req.Content)
+	duplicate, err := h.svc.CheckDuplicateSubmit(c.Request.Context(), c.GetUint("userID"), req.Title, req.Content)
 	if err != nil {
 		core.Fail(c, http.StatusInternalServerError, "duplicate submit check failed")
 		return
@@ -36,7 +36,7 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 		return
 	}
 
-	post, err := h.svc.CreatePost(c.GetUint("userID"), c.GetString("username"), req.Title, req.Content, req.IsPublic, req.Status, req.PublishAt, req.Topics, req.Images)
+	post, err := h.svc.CreatePost(c.Request.Context(), c.GetUint("userID"), c.GetString("username"), req.Title, req.Content, req.IsPublic, req.Status, req.PublishAt, req.Topics, req.Images)
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -51,7 +51,7 @@ func (h *PostHandler) GetPostList(c *gin.Context) {
 		return
 	}
 
-	data, err := h.svc.GetPostList(query.Topic, query.Sort, query.Page, query.PageSize)
+	data, err := h.svc.GetPostList(c.Request.Context(), query.Topic, query.Sort, query.Page, query.PageSize)
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -67,7 +67,7 @@ func (h *PostHandler) GetHotPosts(c *gin.Context) {
 		}
 	}
 
-	data, err := h.svc.GetHotPosts(limit)
+	data, err := h.svc.GetHotPosts(c.Request.Context(), limit)
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -76,7 +76,7 @@ func (h *PostHandler) GetHotPosts(c *gin.Context) {
 }
 
 func (h *PostHandler) GetPost(c *gin.Context) {
-	post, err := h.svc.GetPost(c.Param("id"), c.GetUint("userID"), c.GetString("role"))
+	post, err := h.svc.GetPost(c.Request.Context(), c.Param("id"), c.GetUint("userID"), c.GetString("role"))
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -85,7 +85,7 @@ func (h *PostHandler) GetPost(c *gin.Context) {
 }
 
 func (h *PostHandler) DeletePost(c *gin.Context) {
-	if err := h.svc.DeletePost(c.Param("id"), c.GetUint("userID"), c.GetString("role")); err != nil {
+	if err := h.svc.DeletePost(c.Request.Context(), c.Param("id"), c.GetUint("userID"), c.GetString("role")); err != nil {
 		core.FailByError(c, err)
 		return
 	}
@@ -99,7 +99,7 @@ func (h *PostHandler) UpdatePost(c *gin.Context) {
 		return
 	}
 
-	if err := h.svc.UpdatePost(c.Param("id"), c.GetUint("userID"), req.Title, req.Content, req.IsPublic, req.Status, req.PublishAt, req.Topics, req.Images); err != nil {
+	if err := h.svc.UpdatePost(c.Request.Context(), c.Param("id"), c.GetUint("userID"), req.Title, req.Content, req.IsPublic, req.Status, req.PublishAt, req.Topics, req.Images); err != nil {
 		core.FailByError(c, err)
 		return
 	}
@@ -113,7 +113,7 @@ func (h *PostHandler) GetMyPostList(c *gin.Context) {
 		return
 	}
 
-	posts, err := h.svc.GetMyPostList(userID)
+	posts, err := h.svc.GetMyPostList(c.Request.Context(), userID)
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -122,7 +122,7 @@ func (h *PostHandler) GetMyPostList(c *gin.Context) {
 }
 
 func (h *PostHandler) GetUserPosts(c *gin.Context) {
-	posts, err := h.svc.GetUserPosts(c.Param("id"))
+	posts, err := h.svc.GetUserPosts(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -131,7 +131,7 @@ func (h *PostHandler) GetUserPosts(c *gin.Context) {
 }
 
 func (h *PostHandler) GetUserLikedPosts(c *gin.Context) {
-	posts, err := h.svc.GetUserLikedPosts(c.Param("id"))
+	posts, err := h.svc.GetUserLikedPosts(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -140,7 +140,7 @@ func (h *PostHandler) GetUserLikedPosts(c *gin.Context) {
 }
 
 func (h *PostHandler) GetUserCollectedPosts(c *gin.Context) {
-	posts, err := h.svc.GetUserCollectedPosts(c.Param("id"))
+	posts, err := h.svc.GetUserCollectedPosts(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		core.FailByError(c, err)
 		return

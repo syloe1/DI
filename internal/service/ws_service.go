@@ -95,6 +95,47 @@ func (s *WSService) RegisterConnection(conn *websocket.Conn, userID uint) {
 	go client.readPump()
 }
 
+// SendToUser 向指定用户的所有在线连接推送事件（如已读回执）。
+// 用户离线时静默返回（消息已落库，离线补偿由 sync 兜底）。
+func (s *WSService) SendToUser(userID uint, message interface{}) {
+	msgBytes, err := marshalWithPool(message)
+	if err != nil {
+		return
+	}
+
+	s.hub.Mutex.RLock()
+	client, ok := s.hub.Clients[userID]
+	s.hub.Mutex.RUnlock()
+	if !ok {
+		return
+	}
+
+	select {
+	case client.Send <- msgBytes:
+	default:
+		// 慢客户端：不直接 close channel（二次 close 会 panic），
+		// 交给 Hub 事件循环安全清理。
+		select {
+		case s.hub.Unregister <- client:
+		default:
+			go func(c *WSClient) { s.hub.Unregister <- c }(client)
+		}
+	}
+}
+
+// KickUser 强制断开用户连接（踢下线）。
+// 关闭底层连接后，readPump 会退出并走 Hub 的 unregister 流程，
+// 进而触发 presence 下线 + 群在线分组清理，保证在线状态一致。
+func (s *WSService) KickUser(userID uint) {
+	s.hub.Mutex.RLock()
+	client, ok := s.hub.Clients[userID]
+	s.hub.Mutex.RUnlock()
+	if !ok {
+		return
+	}
+	_ = client.Conn.Close()
+}
+
 func (s *WSService) BroadcastMessage(message interface{}) {
 	msgBytes, err := marshalWithPool(message)
 	if err != nil {

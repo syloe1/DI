@@ -19,7 +19,7 @@
 - Redis 在线状态、实例路由、群成员缓存、群在线成员缓存
 - outbox 可靠事件发布，避免“消息入库成功但 MQ 发布失败”导致丢消息
 - RabbitMQ DLQ，隔离 consumer 处理失败的坏消息
-- QUIC Gateway 基础连接管理实验模块
+- 断线消息补偿：WS 断线重连后按游标增量拉取（sync）
 - `/metrics` 基础监控指标和 pprof 性能分析入口
 
 ## 技术栈
@@ -31,7 +31,6 @@
 - Redis
 - RabbitMQ
 - Gorilla WebSocket
-- quic-go
 
 ## 架构分层
 
@@ -62,14 +61,11 @@ router -> middleware -> handler -> service -> dao -> domain model
 ├── internal/dao            # MySQL/Redis 数据访问
 ├── internal/domain/model   # GORM 模型
 ├── internal/dto            # 请求、响应、事件 DTO
-├── internal/gateway        # QUIC Gateway 实验模块
 ├── internal/handler        # HTTP/WebSocket handler
 ├── internal/middleware     # Gin 中间件
-├── internal/mq             # MQ consumer pool 实验模块
 ├── internal/router         # 路由注册
 ├── internal/service        # 业务逻辑
 ├── pkg/core                # 基础设施
-├── pkg/utils               # 通用工具
 ├── reliability.md          # 可靠性、压测、告警、灰度、演练手册
 ├── go.mod
 └── README.md
@@ -328,26 +324,9 @@ consumer 处理失败时会 `Nack(false, false)`，消息进入 DLQ，避免坏�
 
 这样可以避免一个慢连接拖慢整个群推送。
 
-## QUIC Gateway
+## 断线消息补偿
 
-QUIC 代码位于：[F:\DI\internal\gateway](F:\DI\internal\gateway)
-
-当前是最小闭环实验版本：
-
-```text
-QUIC 连接 -> 首个 stream 认证 uid -> 注册 session -> Enqueue 推送 -> writeLoop 写回 -> Close 自动注销
-```
-
-当前能力：
-
-- 单实例本地 session 管理
-- 新连接顶掉旧连接
-- send queue
-- `PING`/`PONG`
-- 连接超时关闭
-- 可选 Redis presence
-
-当前还没有把主业务入口完全切到 QUIC，WebSocket 仍是主要实时通信入口。
+WebSocket 断线期间的消息不会丢失：服务端消息全部落库，客户端重连后调用 `GET /auth/message/sync?after_id=&limit=` 按游标增量拉取缺失消息，按消息 ID 去重后合并。在线实时推送（WS）+ 离线增量补齐（sync）形成消息投递闭环。
 
 ## 监控指标
 

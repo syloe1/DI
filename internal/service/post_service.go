@@ -32,21 +32,22 @@ type PostListResult struct {
 	Total    int64        `json:"total"`
 }
 
+// PostService 请求链路 Service：ctx 一律方法级传入，不持有请求级上下文（Context 反模式修复）。
 type PostService struct {
 	postRepo dao.PostRepository
 	cache    dao.UserCache
-	ctx      context.Context
+
 }
 
-func NewPostService(postRepo dao.PostRepository, cache dao.UserCache, ctx context.Context) *PostService {
+func NewPostService(postRepo dao.PostRepository, cache dao.UserCache) *PostService {
 	return &PostService{
 		postRepo: postRepo,
 		cache:    cache,
-		ctx:      ctx,
+
 	}
 }
 
-func (s *PostService) CreatePost(userID uint, username string, title string, content string, isPublic bool, status string, publishAt *string, topics string, images string) (*model.Post, error) {
+func (s *PostService) CreatePost(ctx context.Context, userID uint, username string, title string, content string, isPublic bool, status string, publishAt *string, topics string, images string) (*model.Post, error) {
 	post := model.Post{
 		Title:    title,
 		Content:  content,
@@ -74,11 +75,11 @@ func (s *PostService) CreatePost(userID uint, username string, title string, con
 		return nil, core.NewBizError(http.StatusInternalServerError, "create post failed")
 	}
 
-	s.invalidatePostListCaches(post.Topics)
+	s.invalidatePostListCaches(ctx, post.Topics)
 	return &post, nil
 }
 
-func (s *PostService) GetPostList(topic string, sort string, page int, pageSize int) (*PostListResult, error) {
+func (s *PostService) GetPostList(ctx context.Context, topic string, sort string, page int, pageSize int) (*PostListResult, error) {
 	page, pageSize = normalizePagination(page, pageSize, 1, 10)
 	if sort == "" {
 		sort = "time"
@@ -86,7 +87,7 @@ func (s *PostService) GetPostList(topic string, sort string, page int, pageSize 
 	strategy := dao.ResolvePostSortStrategy(sort)
 	key := s.postListCacheKey(topic, strategy.Name(), page, pageSize)
 
-	if val, err := s.cache.Get(s.ctx, key); err == nil {
+	if val, err := s.cache.Get(ctx, key); err == nil {
 		if val == cacheNullValue {
 			return &PostListResult{List: []model.Post{}, Page: page, PageSize: pageSize, Total: 0}, nil
 		}
@@ -101,9 +102,9 @@ func (s *PostService) GetPostList(topic string, sort string, page int, pageSize 
 	}
 
 	lockKey := "lock:" + key
-	locked, err := s.cache.SetNX(s.ctx, lockKey, "1", cacheLockTTL)
+	locked, err := s.cache.SetNX(ctx, lockKey, "1", cacheLockTTL)
 	if err == nil && !locked {
-		if val, ok := spinWaitCache(s.cache, s.ctx, key); ok {
+		if val, ok := spinWaitCache(s.cache, ctx, key); ok {
 			if val == cacheNullValue {
 				return &PostListResult{List: []model.Post{}, Page: page, PageSize: pageSize, Total: 0}, nil
 			}
@@ -118,7 +119,7 @@ func (s *PostService) GetPostList(topic string, sort string, page int, pageSize 
 		}
 	}
 	if locked {
-		defer s.cache.Del(s.ctx, lockKey)
+		defer s.cache.Del(ctx, lockKey)
 	}
 
 	posts, total, err := s.postRepo.FindPublicPage(topic, page, pageSize, strategy)
@@ -127,19 +128,19 @@ func (s *PostService) GetPostList(topic string, sort string, page int, pageSize 
 	}
 
 	if len(posts) == 0 {
-		_ = s.cache.Set(s.ctx, key, cacheNullValue, cacheNullTTL)
+		_ = s.cache.Set(ctx, key, cacheNullValue, cacheNullTTL)
 		return &PostListResult{List: []model.Post{}, Page: page, PageSize: pageSize, Total: 0}, nil
 	}
 
 	if data, err := json.Marshal(map[string]interface{}{"list": posts, "total": total}); err == nil {
-		_ = s.cache.Set(s.ctx, key, string(data), jitterTTL(defaultCacheTTL))
+		_ = s.cache.Set(ctx, key, string(data), jitterTTL(defaultCacheTTL))
 	}
 
 	return &PostListResult{List: posts, Page: page, PageSize: pageSize, Total: total}, nil
 }
 
-func (s *PostService) GetHotPosts(limit int) ([]HotPostItem, error) {
-	rankItems, err := s.cache.ZRevRangeWithScores(s.ctx, postHotRankKey, 0, int64(limit-1))
+func (s *PostService) GetHotPosts(ctx context.Context, limit int) ([]HotPostItem, error) {
+	rankItems, err := s.cache.ZRevRangeWithScores(ctx, postHotRankKey, 0, int64(limit-1))
 	if err != nil {
 		return nil, core.NewBizError(http.StatusInternalServerError, "get hot posts failed")
 	}
@@ -170,7 +171,7 @@ func (s *PostService) GetHotPosts(limit int) ([]HotPostItem, error) {
 		if !post.IsPublic || post.Status != model.PostStatusPublished {
 			continue
 		}
-		s.fillPostViewCount(&post)
+		s.fillPostViewCount(ctx, &post)
 		postMap[post.ID] = HotPostItem{
 			Post:  post,
 			Score: scoreMap[post.ID],
@@ -189,9 +190,9 @@ func (s *PostService) GetHotPosts(limit int) ([]HotPostItem, error) {
 	return orderedPosts, nil
 }
 
-func (s *PostService) GetPost(id string, currentUserID uint, currentUserRole string) (*model.Post, error) {
+func (s *PostService) GetPost(ctx context.Context, id string, currentUserID uint, currentUserRole string) (*model.Post, error) {
 	key := "post:" + id
-	if val, err := s.cache.Get(s.ctx, key); err == nil {
+	if val, err := s.cache.Get(ctx, key); err == nil {
 		if val == cacheNullValue {
 			return nil, core.NewBizError(http.StatusNotFound, "post not found")
 		}
@@ -200,15 +201,15 @@ func (s *PostService) GetPost(id string, currentUserID uint, currentUserRole str
 			if !post.IsPublic && post.UserID != currentUserID && currentUserRole != model.RoleAdmin && currentUserRole != model.RoleSuperAdmin {
 				return nil, core.NewBizError(http.StatusForbidden, "no permission to view this post")
 			}
-			s.attachPostViewCount(&post)
+			s.attachPostViewCount(ctx, &post)
 			return &post, nil
 		}
 	}
 
 	lockKey := "lock:" + key
-	locked, err := s.cache.SetNX(s.ctx, lockKey, "1", cacheLockTTL)
+	locked, err := s.cache.SetNX(ctx, lockKey, "1", cacheLockTTL)
 	if err == nil && !locked {
-		if val, ok := spinWaitCache(s.cache, s.ctx, key); ok {
+		if val, ok := spinWaitCache(s.cache, ctx, key); ok {
 			if val == cacheNullValue {
 				return nil, core.NewBizError(http.StatusNotFound, "post not found")
 			}
@@ -217,31 +218,31 @@ func (s *PostService) GetPost(id string, currentUserID uint, currentUserRole str
 				if !post.IsPublic && post.UserID != currentUserID && currentUserRole != model.RoleAdmin && currentUserRole != model.RoleSuperAdmin {
 					return nil, core.NewBizError(http.StatusForbidden, "no permission to view this post")
 				}
-				s.attachPostViewCount(&post)
+				s.attachPostViewCount(ctx, &post)
 				return &post, nil
 			}
 		}
 	}
 	if locked {
-		defer s.cache.Del(s.ctx, lockKey)
+		defer s.cache.Del(ctx, lockKey)
 	}
 
 	post, err := s.postRepo.FindByID(id)
 	if err != nil {
-		_ = s.cache.Set(s.ctx, key, cacheNullValue, cacheNullTTL)
+		_ = s.cache.Set(ctx, key, cacheNullValue, cacheNullTTL)
 		return nil, core.NewBizError(http.StatusNotFound, "post not found")
 	}
 	if !post.IsPublic && post.UserID != currentUserID && currentUserRole != model.RoleAdmin && currentUserRole != model.RoleSuperAdmin {
 		return nil, core.NewBizError(http.StatusForbidden, "no permission to view this post")
 	}
 	if data, err := json.Marshal(post); err == nil {
-		_ = s.cache.Set(s.ctx, key, string(data), jitterTTL(defaultCacheTTL))
+		_ = s.cache.Set(ctx, key, string(data), jitterTTL(defaultCacheTTL))
 	}
-	s.attachPostViewCount(post)
+	s.attachPostViewCount(ctx, post)
 	return post, nil
 }
 
-func (s *PostService) DeletePost(id string, currentUserID uint, currentUserRole string) error {
+func (s *PostService) DeletePost(ctx context.Context, id string, currentUserID uint, currentUserRole string) error {
 	post, err := s.postRepo.FindByID(id)
 	if err != nil {
 		return core.NewBizError(http.StatusNotFound, "post not found")
@@ -255,11 +256,11 @@ func (s *PostService) DeletePost(id string, currentUserID uint, currentUserRole 
 		return core.NewBizError(http.StatusInternalServerError, "delete post failed")
 	}
 
-	s.invalidatePostCache(id, post.Topics)
+	s.invalidatePostCache(ctx, id, post.Topics)
 	return nil
 }
 
-func (s *PostService) UpdatePost(id string, currentUserID uint, title string, content string, isPublic *bool, status string, publishAt *string, topics string, images string) error {
+func (s *PostService) UpdatePost(ctx context.Context, id string, currentUserID uint, title string, content string, isPublic *bool, status string, publishAt *string, topics string, images string) error {
 	post, err := s.postRepo.FindByID(id)
 	if err != nil {
 		return core.NewBizError(http.StatusNotFound, "post not found")
@@ -306,11 +307,11 @@ func (s *PostService) UpdatePost(id string, currentUserID uint, title string, co
 		return core.NewBizError(http.StatusInternalServerError, "update post failed")
 	}
 
-	s.invalidatePostCache(id, oldTopics, newTopics)
+	s.invalidatePostCache(ctx, id, oldTopics, newTopics)
 	return nil
 }
 
-func (s *PostService) GetMyPostList(userID uint) ([]model.Post, error) {
+func (s *PostService) GetMyPostList(ctx context.Context, userID uint) ([]model.Post, error) {
 	posts, err := s.postRepo.FindByUserID(userID)
 	if err != nil {
 		return nil, core.NewBizError(http.StatusInternalServerError, "get my posts failed")
@@ -318,7 +319,7 @@ func (s *PostService) GetMyPostList(userID uint) ([]model.Post, error) {
 	return posts, nil
 }
 
-func (s *PostService) GetUserPosts(userID string) ([]model.Post, error) {
+func (s *PostService) GetUserPosts(ctx context.Context, userID string) ([]model.Post, error) {
 	posts, err := s.postRepo.FindPublicByUserID(userID)
 	if err != nil {
 		return nil, core.NewBizError(http.StatusInternalServerError, "get user posts failed")
@@ -326,7 +327,7 @@ func (s *PostService) GetUserPosts(userID string) ([]model.Post, error) {
 	return posts, nil
 }
 
-func (s *PostService) GetUserLikedPosts(userID string) ([]model.Post, error) {
+func (s *PostService) GetUserLikedPosts(ctx context.Context, userID string) ([]model.Post, error) {
 	posts, err := s.postRepo.FindLikedByUserID(userID)
 	if err != nil {
 		return nil, core.NewBizError(http.StatusInternalServerError, "get liked posts failed")
@@ -334,7 +335,7 @@ func (s *PostService) GetUserLikedPosts(userID string) ([]model.Post, error) {
 	return posts, nil
 }
 
-func (s *PostService) GetUserCollectedPosts(userID string) ([]model.Post, error) {
+func (s *PostService) GetUserCollectedPosts(ctx context.Context, userID string) ([]model.Post, error) {
 	posts, err := s.postRepo.FindCollectedByUserID(userID)
 	if err != nil {
 		return nil, core.NewBizError(http.StatusInternalServerError, "get collected posts failed")
@@ -346,9 +347,9 @@ func (s *PostService) DuplicateSubmitKey(userID uint, title string, content stri
 	return fmt.Sprintf("duplicate:post:%d:%s", userID, hashPayload(title, content))
 }
 
-func (s *PostService) CheckDuplicateSubmit(userID uint, title string, content string) (bool, error) {
+func (s *PostService) CheckDuplicateSubmit(ctx context.Context, userID uint, title string, content string) (bool, error) {
 	key := s.DuplicateSubmitKey(userID, title, content)
-	ok, err := s.cache.SetNX(s.ctx, key, "1", postDuplicateSubmitTTL)
+	ok, err := s.cache.SetNX(ctx, key, "1", postDuplicateSubmitTTL)
 	if err != nil {
 		return false, err
 	}
@@ -393,16 +394,16 @@ func (s *PostService) postListCacheKey(topic string, sort string, page int, page
 	return key
 }
 
-func (s *PostService) invalidatePostCache(id string, topics ...string) {
+func (s *PostService) invalidatePostCache(ctx context.Context, id string, topics ...string) {
 	keys := []string{"post:" + id}
 	s.appendTopicCacheKeys(&keys, topics...)
-	_ = s.cache.Del(s.ctx, keys...)
+	_ = s.cache.Del(ctx, keys...)
 }
 
-func (s *PostService) invalidatePostListCaches(topics ...string) {
+func (s *PostService) invalidatePostListCaches(ctx context.Context, topics ...string) {
 	keys := []string{}
 	s.appendTopicCacheKeys(&keys, topics...)
-	_ = s.cache.Del(s.ctx, keys...)
+	_ = s.cache.Del(ctx, keys...)
 }
 
 func (s *PostService) appendTopicCacheKeys(keys *[]string, topics ...string) {
@@ -429,12 +430,12 @@ func normalizePagination(page int, pageSize int, defaultPage int, defaultPageSiz
 	return page, pageSize
 }
 
-func (s *PostService) fillPostViewCount(post *model.Post) {
+func (s *PostService) fillPostViewCount(ctx context.Context, post *model.Post) {
 	if post == nil || post.ID == 0 {
 		return
 	}
 	key := fmt.Sprintf("post:view:%d", post.ID)
-	value, err := s.cache.Get(s.ctx, key)
+	value, err := s.cache.Get(ctx, key)
 	if err != nil {
 		return
 	}
@@ -445,15 +446,15 @@ func (s *PostService) fillPostViewCount(post *model.Post) {
 	post.ViewCount = viewCount
 }
 
-func (s *PostService) attachPostViewCount(post *model.Post) {
+func (s *PostService) attachPostViewCount(ctx context.Context, post *model.Post) {
 	if post == nil || post.ID == 0 {
 		return
 	}
 	key := fmt.Sprintf("post:view:%d", post.ID)
-	viewCount, err := s.cache.Incr(s.ctx, key)
+	viewCount, err := s.cache.Incr(ctx, key)
 	if err != nil {
 		return
 	}
 	post.ViewCount = viewCount
-	_, _ = s.cache.ZIncrBy(s.ctx, postHotRankKey, postHotScoreView, fmt.Sprintf("%d", post.ID))
+	_, _ = s.cache.ZIncrBy(ctx, postHotRankKey, postHotScoreView, fmt.Sprintf("%d", post.ID))
 }

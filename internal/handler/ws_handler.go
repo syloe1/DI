@@ -3,6 +3,7 @@ package handler
 import (
 	"log"
 	"net/http"
+	"strings"
 
 	"go-admin/internal/service"
 	"go-admin/pkg/core"
@@ -73,14 +74,39 @@ func NewWSHandler(svc *service.WSService) *WSHandler {
 	}
 }
 
+// extractWSToken 从 WebSocket 握手请求中提取 JWT（P0-3 修复）：
+//  1. 优先 Sec-WebSocket-Protocol 子协议（推荐：不污染 URL，不进访问日志/浏览器历史）
+//  2. 兼容 Authorization: Bearer 头
+//  3. 兜底 URL query ?token=（仅兼容旧客户端，不建议）
+func extractWSToken(r *http.Request) string {
+	if proto := r.Header.Get("Sec-WebSocket-Protocol"); proto != "" {
+		// 浏览器可能发送多个子协议（逗号分隔），约定 token 放首位
+		if i := strings.IndexByte(proto, ','); i >= 0 {
+			return strings.TrimSpace(proto[:i])
+		}
+		return strings.TrimSpace(proto)
+	}
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		return strings.TrimPrefix(strings.TrimSpace(auth), "Bearer ")
+	}
+	return r.URL.Query().Get("token")
+}
+
 func (h *WSHandler) HandleWebSocket(c *gin.Context) {
-	userID, err := h.svc.AuthenticateToken(c.Query("token"))
+	token := extractWSToken(c.Request)
+	userID, err := h.svc.AuthenticateToken(token)
 	if err != nil {
 		core.FailByError(c, err)
 		return
 	}
 
-	conn, err := h.upgrader.Upgrade(c.Writer, c.Request, nil)
+	// 若客户端通过子协议传 token，握手响应必须回显同一子协议，否则浏览器拒绝连接
+	respHeader := http.Header{}
+	if proto := c.Request.Header.Get("Sec-WebSocket-Protocol"); proto != "" {
+		respHeader.Set("Sec-WebSocket-Protocol", token)
+	}
+
+	conn, err := h.upgrader.Upgrade(c.Writer, c.Request, respHeader)
 	if err != nil {
 		log.Printf("websocket upgrade failed: %v", err)
 		return

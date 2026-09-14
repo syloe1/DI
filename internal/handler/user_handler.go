@@ -27,7 +27,7 @@ func (h *UserHandler) Register(c *gin.Context) {
 		return
 	}
 
-	err := h.svc.Register(req.Username, req.Password)
+	err := h.svc.Register(c.Request.Context(), req.Username, req.Password)
 	if err != nil {
 		if errors.Is(err, service.ErrUserExists) {
 			core.Fail(c, http.StatusBadRequest, "username already exists")
@@ -47,7 +47,7 @@ func (h *UserHandler) Login(c *gin.Context) {
 		return
 	}
 
-	token, role, err := h.svc.Login(req.Username, req.Password)
+	token, role, err := h.svc.Login(c.Request.Context(), req.Username, req.Password)
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -60,7 +60,7 @@ func (h *UserHandler) Login(c *gin.Context) {
 }
 
 func (h *UserHandler) Logout(c *gin.Context) {
-	if err := h.svc.Logout(c.GetUint("userID")); err != nil {
+	if err := h.svc.Logout(c.Request.Context(), c.GetUint("userID")); err != nil {
 		core.FailByError(c, err)
 		return
 	}
@@ -74,7 +74,7 @@ func (h *UserHandler) AddUser(c *gin.Context) {
 		return
 	}
 
-	err := h.svc.AddUser(c.GetString("role"), req.Username, req.Password, req.Role)
+	err := h.svc.AddUser(c.Request.Context(), c.GetString("role"), req.Username, req.Password, req.Role)
 	if err != nil {
 		if errors.Is(err, service.ErrUserExists) {
 			core.Fail(c, http.StatusBadRequest, "username already exists")
@@ -88,7 +88,7 @@ func (h *UserHandler) AddUser(c *gin.Context) {
 }
 
 func (h *UserHandler) GetUserList(c *gin.Context) {
-	data, err := h.svc.GetUserList(c.GetString("role"))
+	data, err := h.svc.GetUserList(c.Request.Context(), c.GetString("role"))
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -102,7 +102,7 @@ func (h *UserHandler) GetUser(c *gin.Context) {
 		return
 	}
 
-	user, err := h.svc.GetUser(id)
+	user, err := h.svc.GetUser(c.Request.Context(), id)
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -122,7 +122,7 @@ func (h *UserHandler) UpdateUser(c *gin.Context) {
 		return
 	}
 
-	if err := h.svc.UpdateUser(id, c.GetUint("userID"), c.GetString("role"), req.Username, req.Role); err != nil {
+	if err := h.svc.UpdateUser(c.Request.Context(), id, c.GetUint("userID"), c.GetString("role"), req.Username, req.Role); err != nil {
 		core.FailByError(c, err)
 		return
 	}
@@ -141,7 +141,7 @@ func (h *UserHandler) ChangePassword(c *gin.Context) {
 		return
 	}
 
-	if err := h.svc.ChangePassword(id, c.GetUint("userID"), c.GetString("role"), req.OldPassword, req.NewPassword); err != nil {
+	if err := h.svc.ChangePassword(c.Request.Context(), id, c.GetUint("userID"), c.GetString("role"), req.OldPassword, req.NewPassword); err != nil {
 		core.FailByError(c, err)
 		return
 	}
@@ -154,7 +154,7 @@ func (h *UserHandler) DeleteUser(c *gin.Context) {
 		return
 	}
 
-	if err := h.svc.DeleteUser(c.GetString("role"), id); err != nil {
+	if err := h.svc.DeleteUser(c.Request.Context(), c.GetString("role"), id); err != nil {
 		core.FailByError(c, err)
 		return
 	}
@@ -162,7 +162,7 @@ func (h *UserHandler) DeleteUser(c *gin.Context) {
 }
 
 func (h *UserHandler) SearchUser(c *gin.Context) {
-	data, err := h.svc.SearchUser(c.Query("username"))
+	data, err := h.svc.SearchUser(c.Request.Context(), c.Query("username"))
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -176,7 +176,7 @@ func (h *UserHandler) GetUserOnlineStatus(c *gin.Context) {
 		return
 	}
 
-	data, err := h.svc.GetUserOnlineStatus(id)
+	data, err := h.svc.GetUserOnlineStatus(c.Request.Context(), id)
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -185,7 +185,7 @@ func (h *UserHandler) GetUserOnlineStatus(c *gin.Context) {
 }
 
 func (h *UserHandler) GetOnlineUsers(c *gin.Context) {
-	data, err := h.svc.GetOnlineUsers()
+	data, err := h.svc.GetOnlineUsers(c.Request.Context())
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -200,7 +200,7 @@ func (h *UserHandler) BatchGetUserRoles(c *gin.Context) {
 		return
 	}
 
-	data, err := h.svc.BatchGetUserRoles(req.IDs)
+	data, err := h.svc.BatchGetUserRoles(c.Request.Context(), req.IDs)
 	if err != nil {
 		core.FailByError(c, err)
 		return
@@ -217,7 +217,7 @@ func (h *UserHandler) BatchPutUserRoles(c *gin.Context) {
 	currentUserID := c.GetUint("userID")
 	currentRole := c.GetString("role")
 
-	err := h.svc.BatchPutUserRoles(currentUserID, currentRole, req.IDs, req.Role)
+	err := h.svc.BatchPutUserRoles(c.Request.Context(), currentUserID, currentRole, req.IDs, req.Role)
 	if err != nil {
 		core.FailByError(c, err)
 		return

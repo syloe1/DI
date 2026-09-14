@@ -26,6 +26,7 @@ type ServerConfig struct {
 	Port         string        `mapstructure:"port"`
 	ReadTimeout  time.Duration `mapstructure:"read_timeout"`
 	WriteTimeout time.Duration `mapstructure:"write_timeout"`
+	CORSOrigins  []string      `mapstructure:"cors_origins"`
 }
 
 type MysqlConfig struct {
@@ -106,6 +107,9 @@ func (c *ServerConfig) applyDefaults() {
 	}
 	if c.WriteTimeout <= 0 {
 		c.WriteTimeout = 30 * time.Second
+	}
+	if len(c.CORSOrigins) == 0 {
+		c.CORSOrigins = []string{"http://localhost:5173", "http://localhost:3000"}
 	}
 }
 
@@ -223,3 +227,4 @@ func (c *App) GetMysqlConfig() MysqlConfig   { return c.Mysql }
 func (c *App) GetRedisConfig() RedisConfig    { return c.Redis }
 func (c *App) GetServerConfig() ServerConfig  { return c.Server }
 func (c *App) GetJwtConfig() JwtConfig        { return c.Jwt }
+func (c *App) GetCORSOrigins() []string       { return c.Server.CORSOrigins }

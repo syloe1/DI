@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"time"
 
 	"go-admin/internal/dao"
@@ -19,12 +18,16 @@ import (
 
 var ErrUserExists = errors.New("user exists")
 
+// UserService 请求链路 Service：ctx 一律方法级传入，不持有请求级上下文（Context 反模式修复）。
 type UserService struct {
 	db     dao.UserDB
 	cache  dao.UserCache
 	jwtCfg dao.JWTConfig
 	jwtKey []byte
-	ctx    context.Context
+	presence *PresenceService // 在线状态唯一来源（S2-11）
+	// onUserKicked 踢下线回调（container 注入，避免 Service 循环依赖）：
+	// 用户权限/角色变更时强制断开其 WS 连接，触发 presence 下线。
+	onUserKicked func(userID uint)
 }
 
 type Claims struct {
@@ -34,17 +37,22 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-func NewUserService(db dao.UserDB, cache dao.UserCache, jwtCfg dao.JWTConfig, jwtKey []byte, ctx context.Context) *UserService {
+func NewUserService(db dao.UserDB, cache dao.UserCache, jwtCfg dao.JWTConfig, jwtKey []byte, presence *PresenceService) *UserService {
 	return &UserService{
-		db:     db,
-		cache:  cache,
-		jwtCfg: jwtCfg,
-		jwtKey: jwtKey,
-		ctx:    ctx,
+		db:       db,
+		cache:    cache,
+		jwtCfg:   jwtCfg,
+		jwtKey:   jwtKey,
+		presence: presence,
 	}
 }
 
-func (s *UserService) Register(username string, password string) error {
+// SetOnUserKicked 注入踢下线回调（由 container 在 wsService 创建后调用，避免构造期循环依赖）。
+func (s *UserService) SetOnUserKicked(fn func(userID uint)) {
+	s.onUserKicked = fn
+}
+
+func (s *UserService) Register(ctx context.Context, username string, password string) error {
 	if err := s.ensureUsernameAvailable(username); err != nil {
 		return err
 	}
@@ -63,11 +71,11 @@ func (s *UserService) Register(username string, password string) error {
 		return err
 	}
 
-	s.cacheUserProfile(&user)
+	s.cacheUserProfile(ctx, &user)
 	return nil
 }
 
-func (s *UserService) AddUser(actorRole string, username string, password string, role string) error {
+func (s *UserService) AddUser(ctx context.Context, actorRole string, username string, password string, role string) error {
 	if actorRole != model.RoleAdmin && actorRole != model.RoleSuperAdmin {
 		return core.NewBizError(http.StatusForbidden, "no permission to add user")
 	}
@@ -92,18 +100,18 @@ func (s *UserService) AddUser(actorRole string, username string, password string
 		return err
 	}
 
-	s.cacheUserProfile(&user)
-	_ = s.cache.Del(s.ctx, "user:list")
+	s.cacheUserProfile(ctx, &user)
+	_ = s.cache.Del(ctx, "user:list")
 	return nil
 }
 
-func (s *UserService) GetUserList(actorRole string) ([]map[string]interface{}, error) {
+func (s *UserService) GetUserList(ctx context.Context, actorRole string) ([]map[string]interface{}, error) {
 	if actorRole != model.RoleAdmin && actorRole != model.RoleSuperAdmin {
 		return nil, core.NewBizError(http.StatusForbidden, "no permission to view user list")
 	}
 
 	key := "user:list"
-	if val, err := s.cache.Get(s.ctx, key); err == nil {
+	if val, err := s.cache.Get(ctx, key); err == nil {
 		if val == cacheNullValue {
 			return []map[string]interface{}{}, nil
 		}
@@ -115,9 +123,9 @@ func (s *UserService) GetUserList(actorRole string) ([]map[string]interface{}, e
 	}
 
 	lockKey := "lock:" + key
-	locked, err := s.cache.SetNX(s.ctx, lockKey, "1", cacheLockTTL)
+	locked, err := s.cache.SetNX(ctx, lockKey, "1", cacheLockTTL)
 	if err == nil && !locked {
-		if val, ok := spinWaitCache(s.cache, s.ctx, key); ok {
+		if val, ok := spinWaitCache(s.cache, ctx, key); ok {
 			if val == cacheNullValue {
 				return []map[string]interface{}{}, nil
 			}
@@ -129,7 +137,7 @@ func (s *UserService) GetUserList(actorRole string) ([]map[string]interface{}, e
 		}
 	}
 	if locked {
-		defer s.cache.Del(s.ctx, lockKey)
+		defer s.cache.Del(ctx, lockKey)
 	}
 
 	userList, err := s.db.FindAll()
@@ -148,20 +156,20 @@ func (s *UserService) GetUserList(actorRole string) ([]map[string]interface{}, e
 	}
 
 	if len(safeList) == 0 {
-		_ = s.cache.Set(s.ctx, key, cacheNullValue, cacheNullTTL)
+		_ = s.cache.Set(ctx, key, cacheNullValue, cacheNullTTL)
 		return safeList, nil
 	}
 
 	if listJSON, err := json.Marshal(safeList); err == nil {
-		_ = s.cache.Set(s.ctx, key, string(listJSON), jitterTTL(defaultCacheTTL))
+		_ = s.cache.Set(ctx, key, string(listJSON), jitterTTL(defaultCacheTTL))
 	}
 
 	return safeList, nil
 }
 
-func (s *UserService) GetUser(id uint) (*model.User, error) {
+func (s *UserService) GetUser(ctx context.Context, id uint) (*model.User, error) {
 	key := fmt.Sprintf("user:%d", id)
-	if val, err := s.cache.Get(s.ctx, key); err == nil {
+	if val, err := s.cache.Get(ctx, key); err == nil {
 		if val == cacheNullValue {
 			return nil, core.NewBizError(http.StatusNotFound, "user not found")
 		}
@@ -173,9 +181,9 @@ func (s *UserService) GetUser(id uint) (*model.User, error) {
 	}
 
 	lockKey := "lock:" + key
-	locked, err := s.cache.SetNX(s.ctx, lockKey, "1", cacheLockTTL)
+	locked, err := s.cache.SetNX(ctx, lockKey, "1", cacheLockTTL)
 	if err == nil && !locked {
-		if val, ok := spinWaitCache(s.cache, s.ctx, key); ok {
+		if val, ok := spinWaitCache(s.cache, ctx, key); ok {
 			if val == cacheNullValue {
 				return nil, core.NewBizError(http.StatusNotFound, "user not found")
 			}
@@ -187,23 +195,23 @@ func (s *UserService) GetUser(id uint) (*model.User, error) {
 		}
 	}
 	if locked {
-		defer s.cache.Del(s.ctx, lockKey)
+		defer s.cache.Del(ctx, lockKey)
 	}
 
 	user, err := s.db.FindByID(id)
 	if err != nil {
-		_ = s.cache.Set(s.ctx, key, cacheNullValue, cacheNullTTL)
+		_ = s.cache.Set(ctx, key, cacheNullValue, cacheNullTTL)
 		return nil, core.NewBizError(http.StatusNotFound, "user not found")
 	}
 
 	if userJSON, err := json.Marshal(user); err == nil {
-		_ = s.cache.Set(s.ctx, key, string(userJSON), jitterTTL(defaultCacheTTL))
+		_ = s.cache.Set(ctx, key, string(userJSON), jitterTTL(defaultCacheTTL))
 	}
 
 	return user, nil
 }
 
-func (s *UserService) UpdateUser(id uint, currentUserID uint, currentRole string, username string, role string) error {
+func (s *UserService) UpdateUser(ctx context.Context, id uint, currentUserID uint, currentRole string, username string, role string) error {
 	user, err := s.db.FindByID(id)
 	if err != nil {
 		return core.NewBizError(http.StatusNotFound, "user not found")
@@ -228,14 +236,16 @@ func (s *UserService) UpdateUser(id uint, currentUserID uint, currentRole string
 		return core.NewBizError(http.StatusInternalServerError, "update user failed")
 	}
 
-	s.cacheUserProfile(user)                                        // 更新用户缓存
-	_ = s.cache.SRem(s.ctx, OnlineUsersKey, id)                     // 把用户踢下线（强制重新登录拿最新权限）
-	s.deleteUserProfileCache(id)                                    // 删除个人缓存
-	_ = s.cache.Del(s.ctx, fmt.Sprintf("user:%d", id), "user:list") // 删除用户列表缓存
+	s.cacheUserProfile(ctx, user)     // 更新用户缓存
+	if s.onUserKicked != nil {
+		s.onUserKicked(id) // 强制断开 WS 连接 → presence 下线
+	}
+	s.deleteUserProfileCache(ctx, id) // 删除个人缓存
+	_ = s.cache.Del(ctx, fmt.Sprintf("user:%d", id), "user:list") // 删除用户列表缓存
 	return nil
 }
 
-func (s *UserService) ChangePassword(id uint, currentUserID uint, currentRole string, oldPassword string, newPassword string) error {
+func (s *UserService) ChangePassword(ctx context.Context, id uint, currentUserID uint, currentRole string, oldPassword string, newPassword string) error {
 	user, err := s.db.FindByID(id)
 	if err != nil {
 		return core.NewBizError(http.StatusNotFound, "user not found")
@@ -268,11 +278,11 @@ func (s *UserService) ChangePassword(id uint, currentUserID uint, currentRole st
 		return core.NewBizError(http.StatusInternalServerError, "change password failed")
 	}
 
-	_ = s.cache.Del(s.ctx, fmt.Sprintf("user:%d", id), "user:list")
+	_ = s.cache.Del(ctx, fmt.Sprintf("user:%d", id), "user:list")
 	return nil
 }
 
-func (s *UserService) DeleteUser(actorRole string, id uint) error {
+func (s *UserService) DeleteUser(ctx context.Context, actorRole string, id uint) error {
 	if actorRole != model.RoleAdmin && actorRole != model.RoleSuperAdmin {
 		return core.NewBizError(http.StatusForbidden, "no permission to delete user")
 	}
@@ -285,11 +295,11 @@ func (s *UserService) DeleteUser(actorRole string, id uint) error {
 		return core.NewBizError(http.StatusInternalServerError, "delete user failed")
 	}
 
-	_ = s.cache.Del(s.ctx, fmt.Sprintf("user:%d", id), "user:list")
+	_ = s.cache.Del(ctx, fmt.Sprintf("user:%d", id), "user:list")
 	return nil
 }
 
-func (s *UserService) Login(username string, password string) (string, string, error) {
+func (s *UserService) Login(ctx context.Context, username string, password string) (string, string, error) {
 	user, err := s.db.FindByUsername(username)
 	if err != nil {
 		return "", "", core.NewBizError(http.StatusNotFound, "user not found")
@@ -316,22 +326,20 @@ func (s *UserService) Login(username string, password string) (string, string, e
 		return "", "", core.NewBizError(http.StatusInternalServerError, "sign token failed")
 	}
 
-	s.cacheUserProfile(user)
-	_ = s.cache.SAdd(s.ctx, OnlineUsersKey, user.ID)
+	s.cacheUserProfile(ctx, user)
+	// 在线状态由 WS 连接管理（presence），登录成功不写在线标记，避免"登录≠连接"的假在线。
 	return tokenString, user.Role, nil
 }
 
-func (s *UserService) Logout(userID uint) error {
+func (s *UserService) Logout(ctx context.Context, userID uint) error {
 	if userID == 0 {
 		return core.NewBizError(http.StatusUnauthorized, "missing user identity")
 	}
-	if err := s.cache.SRem(s.ctx, OnlineUsersKey, userID); err != nil {
-		return core.NewBizError(http.StatusInternalServerError, "logout failed")
-	}
+	// 在线状态由 WS 断开时通过 presence 清理；Logout 仅作 JWT 失效语义（前端丢弃 token）。
 	return nil
 }
 
-func (s *UserService) SearchUser(username string) ([]map[string]interface{}, error) {
+func (s *UserService) SearchUser(ctx context.Context, username string) ([]map[string]interface{}, error) {
 	if username == "" {
 		return nil, core.NewBizError(http.StatusBadRequest, "username is required")
 	}
@@ -348,7 +356,7 @@ func (s *UserService) SearchUser(username string) ([]map[string]interface{}, err
 			"username": user.Username,
 			"role":     user.Role,
 		}
-		if online, err := s.cache.SIsMember(s.ctx, OnlineUsersKey, user.ID); err == nil {
+		if online, err := s.presence.IsOnline(ctx, user.ID); err == nil {
 			item["is_online"] = online
 		}
 		result = append(result, item)
@@ -357,8 +365,8 @@ func (s *UserService) SearchUser(username string) ([]map[string]interface{}, err
 	return result, nil
 }
 
-func (s *UserService) GetUserOnlineStatus(id uint) (map[string]interface{}, error) {
-	online, err := s.cache.SIsMember(s.ctx, OnlineUsersKey, id)
+func (s *UserService) GetUserOnlineStatus(ctx context.Context, id uint) (map[string]interface{}, error) {
+	online, err := s.presence.IsOnline(ctx, id)
 	if err != nil {
 		return nil, core.NewBizError(http.StatusInternalServerError, "get online status failed")
 	}
@@ -369,21 +377,15 @@ func (s *UserService) GetUserOnlineStatus(id uint) (map[string]interface{}, erro
 	}, nil
 }
 
-func (s *UserService) GetOnlineUsers() (map[string]interface{}, error) {
-	members, err := s.cache.SMembers(s.ctx, OnlineUsersKey)
+func (s *UserService) GetOnlineUsers(ctx context.Context) (map[string]interface{}, error) {
+	ids, err := s.presence.GetOnlineUserIDs(ctx)
 	if err != nil {
 		return nil, core.NewBizError(http.StatusInternalServerError, "get online users failed")
 	}
 
-	users := make([]map[string]interface{}, 0, len(members))
-	for _, member := range members {
-		id64, err := strconv.ParseUint(member, 10, 64)
-		if err != nil {
-			continue
-		}
-		id := uint(id64)
-
-		if profile, ok := s.getCachedUserProfile(id); ok {
+	users := make([]map[string]interface{}, 0, len(ids))
+	for _, id := range ids {
+		if profile, ok := s.getCachedUserProfile(ctx, id); ok {
 			users = append(users, profile)
 			continue
 		}
@@ -392,7 +394,7 @@ func (s *UserService) GetOnlineUsers() (map[string]interface{}, error) {
 		if err != nil {
 			continue
 		}
-		s.cacheUserProfile(user)
+		s.cacheUserProfile(ctx, user)
 		profile := buildSafeUserProfile(user)
 		profile["is_online"] = true
 		users = append(users, profile)
@@ -403,14 +405,14 @@ func (s *UserService) GetOnlineUsers() (map[string]interface{}, error) {
 		"list":  users,
 	}, nil
 }
-func (s *UserService) GetUserRole(id uint) (string, error) {
+func (s *UserService) GetUserRole(ctx context.Context, id uint) (string, error) {
 	user, err := s.db.FindByID(id)
 	if err != nil {
 		return "", core.NewBizError(http.StatusNotFound, "user not found")
 	}
 	return user.Role, nil
 }
-func (s *UserService) BatchGetUserRoles(ids []uint) (map[uint]string, error) {
+func (s *UserService) BatchGetUserRoles(ctx context.Context, ids []uint) (map[uint]string, error) {
 	if len(ids) == 0 {
 		return nil, core.NewBizError(http.StatusBadRequest, "ids cannot be empty")
 	}
@@ -430,7 +432,7 @@ func (s *UserService) BatchGetUserRoles(ids []uint) (map[uint]string, error) {
 	return roleMap, nil
 }
 
-func (s *UserService) BatchPutUserRoles(currentUserID uint, currentRole string, ids []uint, role string) error {
+func (s *UserService) BatchPutUserRoles(ctx context.Context, currentUserID uint, currentRole string, ids []uint, role string) error {
 	// 基础参数校验
 	if len(ids) == 0 {
 		return core.NewBizError(http.StatusBadRequest, "ids cannot be empty")

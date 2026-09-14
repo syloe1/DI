@@ -29,3 +29,6 @@ Thumbs.db
 # Test scratch files
 TEST/
 r.md
+
+# Secrets：本地真实配置不入库（用 config.example.yaml 作为模板）
+/config/config.yaml
