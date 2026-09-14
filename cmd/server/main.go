@@ -42,14 +42,14 @@ func main() {
 		appLogger.Fatalf("init redis failed: %v", err)
 	}
 	defer func() { _ = redisClient.Close() }()
-	//异步数据库迁移
+	//异步数据库迁移（golang-migrate，SQL 版本化）
 	go func() {
-		appLogger.Print("start database auto migration")
-		if err := core.AutoMigrate(db); err != nil {
-			appLogger.Printf("database auto migration failed: %v", err)
+		appLogger.Print("start database migration")
+		if err := core.RunMigrations(db); err != nil {
+			appLogger.Printf("database migration failed: %v", err)
 			return
 		}
-		appLogger.Print("database auto migration completed")
+		appLogger.Print("database migration completed")
 	}()
 	//依赖注入容器 DI Container
 	appContainer := container.NewContainer(cfg, db, redisClient, appLogger)

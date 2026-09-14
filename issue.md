@@ -96,9 +96,7 @@
 - **问题**：路由散落在 `router.go` 注释，无 Swagger/OpenAPI。
 - **建议**：引入 `swaggo/swag` 生成文档（已有 Swagger UI 容器）。
 
-### [P3-4] 数据库迁移无版本管理
-- **问题**：裸用 `GORM AutoMigrate`，不可回滚、无历史。
-- **建议**：引入 `golang-migrate` 或 `goose`。
+### [P3-4] 数据库迁移无版本管理 —— ✅ 已修复（S3-15：golang-migrate + embed SQL，见 `pkg/core/migrations/`）
 
 ### [P3-5] 日志/配置/观测优化
 - **问题**：标准库 `log`（无级别/结构化/轮转）；无配置热更新；`pprof` 绑定 `127.0.0.1` 导致 Docker 容器内宿主机不可达。

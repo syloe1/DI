@@ -28,7 +28,8 @@ var testDB *gorm.DB
 func TestMain(m *testing.M) {
 	dsn := os.Getenv("TEST_MYSQL_DSN")
 	if dsn == "" {
-		dsn = "root:test123@tcp(127.0.0.1:33061)/go_test?charset=utf8mb4&parseTime=True&loc=Local"
+		// multiStatements=true：golang-migrate 迁移 SQL 为多语句文件
+		dsn = "root:test123@tcp(127.0.0.1:33061)/go_test?charset=utf8mb4&parseTime=True&loc=Local&multiStatements=true"
 	}
 	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
@@ -36,8 +37,14 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic("connect test mysql failed: " + err.Error())
 	}
-	if err := core.AutoMigrate(db); err != nil {
-		panic("auto migrate failed: " + err.Error())
+	// 迁移前清理历史脏状态：失败过的迁移会在 schema_migrations 标记 dirty，
+	// 测试库直接重建该表（生产环境 dirty 需人工修复，见 golang-migrate force）。
+	if err := db.Exec("DROP TABLE IF EXISTS schema_migrations").Error; err != nil {
+		panic("drop schema_migrations failed: " + err.Error())
+	}
+	// 走生产同款迁移路径（golang-migrate SQL），顺带验证迁移本身可用
+	if err := core.RunMigrations(db); err != nil {
+		panic("run migrations failed: " + err.Error())
 	}
 	testDB = db
 	code := m.Run()

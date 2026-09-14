@@ -249,7 +249,7 @@ return core.NewBizError(http.StatusNotFound, "post not found")
 
 #### 4.4 数据库迁移管理
 
-裸用 `GORM AutoMigrate`，无版本控制。生产环境会直接修改表结构，不可回滚。
+✅ 已改 golang-migrate（SQL 版本化）：迁移文件 `pkg/core/migrations/*.sql`（embed 进二进制），启动执行未应用迁移，`schema_migrations` 表记录版本，支持 down 回滚。历史问题"裸 AutoMigrate 不可回滚"已解决。
 
 #### 4.5 配置管理
 
@@ -348,7 +348,7 @@ return core.NewBizError(http.StatusNotFound, "post not found")
 ☐ MySQL/Redis 连接池健康检查与自动恢复
 ☐ 优雅关闭（SIGTERM → 停收新请求 → 排空队列 → 清理在线状态 → 关闭连接）
 ☐ Outbox 表定时清理（已 published 超 7 天删除）
-☐ 引入 golang-migrate 替代裸 AutoMigrate
+☑ 引入 golang-migrate 替代裸 AutoMigrate（S3-15 已完成）
 ```
 
 #### 测试体系建设

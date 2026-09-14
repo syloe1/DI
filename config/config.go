@@ -64,9 +64,11 @@ type RabbitMQConfig struct {
 // =============================================================================
 
 // DSN 返回 MySQL 连接串，统一由配置负责格式，调用方无需知道内部拼法。
+// multiStatements=true 是 golang-migrate 执行多语句迁移 SQL 所需；
+// 业务 SQL 均走参数化/gorm 构造，不受影响。
 func (c MysqlConfig) DSN() string {
 	return fmt.Sprintf(
-		"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local",
+		"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local&multiStatements=true",
 		c.Username, c.Password, c.Host, c.Port, c.Dbname,
 	)
 }

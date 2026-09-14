@@ -81,7 +81,7 @@ router -> middleware -> handler -> service -> dao -> domain model
 2. 加载 `config/config.yaml`。
 3. 初始化 MySQL。
 4. 初始化 Redis。
-5. 异步执行 AutoMigrate。
+5. 异步执行数据库迁移（golang-migrate）。
 6. 初始化依赖注入容器。
 7. 初始化 RabbitMQ、WebSocket Hub、consumer、outbox publisher。
 8. 注册 Gin 路由。
@@ -455,23 +455,14 @@ Authorization: Bearer <token>
 
 ## 数据库迁移
 
-启动时会自动迁移：
+基于 [golang-migrate](https://github.com/golang-migrate/migrate)（SQL 版本化），迁移文件嵌入二进制：
 
-- `User`
-- `Post`
-- `Comment`
-- `Like`
-- `Dislike`
-- `Collect`
-- `Share`
-- `UserRelation`
-- `Message`
-- `ChatGroup`
-- `ChatGroupMember`
-- `ChatGroupInvitation`
-- `ChatGroupJoinRequest`
-- `ChatGroupMessage`
-- `MessageOutbox`
+- 迁移文件：`pkg/core/migrations/*.sql`（`go:embed`，构建产物自包含）
+- 启动时执行 `core.RunMigrations(db)`：只应用未执行的迁移，已应用版本记录在 `schema_migrations` 表
+- 可回滚：`000001_init.down.sql` 提供逆操作
+- 数据库 DSN 需带 `multiStatements=true`（多语句迁移 SQL 所需）
+
+新增表/改表流程：追加新版本迁移文件（如 `000002_xxx.up.sql` + `.down.sql`），不要修改已应用的历史迁移。
 
 迁移入口：[F:\DI\pkg\core\migrate.go](F:\DI\pkg\core\migrate.go)
 
