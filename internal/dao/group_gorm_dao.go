@@ -384,15 +384,16 @@ func (r *GormGroupRepository) CreateGroupMessageWithOutboxBuilder(message *model
 func (r *GormGroupRepository) ListGroupMessages(groupID uint, offset int, limit int) ([]model.ChatGroupMessage, error) {
 	var messages []model.ChatGroupMessage
 	/*
-		select * from chat_group_messages
-		where group_id = ?
-		order by created_at DESC
-		Limit ? offset ?
+		先取最新的 limit 条（DESC），再反转为 ASC：
+		聊天页打开看到的是最近一页，且顺序从旧到新、新消息在底部
 	*/
-	err := r.db.Where("group_id = ?", groupID).
-		Order("created_at DESC").
+	latest := r.db.Model(&model.ChatGroupMessage{}).
+		Where("group_id = ?", groupID).
+		Order("created_at DESC, id DESC").
 		Offset(offset).
-		Limit(limit).
+		Limit(limit)
+	err := r.db.Table("(?) AS latest", latest).
+		Order("created_at ASC, id ASC").
 		Find(&messages).Error
 	return messages, err
 }

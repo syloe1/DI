@@ -58,14 +58,18 @@ services:
     image: rabbitmq:3.13-management
     container_name: go-admin-rabbitmq
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      # 宿主端口用 5673/15673：避免与本机 Mall 项目的 rabbitmq(5672/15672) 冲突
+      - "5673:5672"
+      - "15673:15672"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      # 不用 `ping`：它只探测 Erlang 节点存活，此时 5672 监听尚未就绪，
+      # app 起来会连不上 AMQP 而崩溃重启（靠 restart 兜底，日志里一串 FATAL）。
+      # check_port_connectivity 会等所有 listener 真正可连接。
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
       interval: 10s
-      timeout: 5s
+      timeout: 10s
       retries: 30
     restart: unless-stopped
 
@@ -73,7 +77,10 @@ services:
     image: swaggerapi/swagger-ui:v5.17.14
     container_name: go-admin-swagger-ui
     ports:
-      - "8081:8080"
+      # 宿主机端口用 8288 而非 8081：Windows 上 8081-8180 常被 Hyper-V/WSL
+      # 预留（netsh interface ipv4 show excludedportrange protocol=tcp 可查），
+      # Docker 绑定会报 "socket access forbidden"。
+      - "8288:8080"
     environment:
       SWAGGER_JSON: /openapi/openapi.yaml
     volumes:

@@ -66,13 +66,17 @@ type MessageService struct {
 	// onMessagesRead 已读回执回调（由 container 注入，避免 Service 循环依赖）：
 	// 参数：senderUID=被读消息的发送方（要通知的人）、readerUID=发起已读的用户、messageIDs=被读消息 ID 列表。
 	onMessagesRead func(senderUID uint, readerUID uint, messageIDs []uint)
+	// onPrivateMessage 私信落库后的实时推送回调（由 container 注入）：
+	// 参数 msg=刚落库的消息（含自增 ID 与 CreatedAt）。推给收件人在线连接。
+	onPrivateMessage func(msg *model.Message)
 }
 
-func NewMessageService(messageRepo dao.MessageRepository, cache dao.UserCache, onMessagesRead func(uint, uint, []uint)) *MessageService {
+func NewMessageService(messageRepo dao.MessageRepository, cache dao.UserCache, onMessagesRead func(uint, uint, []uint), onPrivateMessage func(*model.Message)) *MessageService {
 	return &MessageService{
-		messageRepo:    messageRepo,
-		cache:          cache,
-		onMessagesRead: onMessagesRead,
+		messageRepo:      messageRepo,
+		cache:            cache,
+		onMessagesRead:   onMessagesRead,
+		onPrivateMessage: onPrivateMessage,
 	}
 }
 
@@ -240,6 +244,12 @@ func (s *MessageService) SendMessage(ctx context.Context, userID uint, toUID uin
 
 	if err := s.messageRepo.CreateMessage(message); err != nil {
 		return nil, core.NewBizError(http.StatusInternalServerError, "send message failed")
+	}
+
+	// 实时推送：收件人在线则立即收到 WS message 事件（写通道有缓冲 + 慢客户端丢弃，不阻塞请求）。
+	// 离线则静默，下次打开会话时由 list/sync 兜底。
+	if s.onPrivateMessage != nil {
+		s.onPrivateMessage(message)
 	}
 
 	return &SendMessageResult{

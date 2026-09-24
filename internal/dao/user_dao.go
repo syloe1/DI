@@ -44,4 +44,5 @@ type UserCache interface {
 
 type JWTConfig interface {
 	GetSecret() []byte
+	GetExpireHours() time.Duration
 }

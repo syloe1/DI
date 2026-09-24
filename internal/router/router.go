@@ -45,22 +45,6 @@ func InitDependencyInjectionRouter(container *container.Container) *gin.Engine {
 		public.POST("/user/register", middleware.RateLimit("register", 1.0/30.0, 2, middleware.ClientIPKey), container.UserHandler.Register)
 		public.POST("/user/login", middleware.RateLimit("login", 1, 5, middleware.ClientIPKey), container.UserHandler.Login)
 
-		// 帖子公开查询
-		public.GET("/post/list", container.PostHandler.GetPostList)
-		public.GET("/post/hot", container.PostHandler.GetHotPosts)
-		public.GET("/post/:id", container.PostHandler.GetPost)
-		public.GET("/post/user/:id", container.PostHandler.GetUserPosts)
-		public.GET("/post/user/:id/liked", container.PostHandler.GetUserLikedPosts)
-		public.GET("/post/user/:id/collected", container.PostHandler.GetUserCollectedPosts)
-
-		// 评论公开查询
-		public.GET("/comment/post/:post_id", container.CommentHandler.GetPostComments)
-		public.GET("/comment/user/:id", container.CommentHandler.GetPublicUserComments)
-
-		// 互动计数
-		public.GET("/interact/count/:post_id", container.InteractHandler.GetInteractCount)
-
-		// 用户公开信息
 		// 用户公开信息
 		public.GET("/user/search", container.UserHandler.SearchUser)
 		public.GET("/user/online/list", container.UserHandler.GetOnlineUsers)
@@ -85,45 +69,6 @@ func InitDependencyInjectionRouter(container *container.Container) *gin.Engine {
 			userGroup.PUT("/batch-roles", container.UserHandler.BatchPutUserRoles)
 			userGroup.PUT("/:id", container.UserHandler.UpdateUser)
 			userGroup.PUT("/password/:id", container.UserHandler.ChangePassword)
-		}
-
-		// ---- 帖子模块 /auth/post ----
-		postGroup := auth.Group("/post")
-		{
-			postGroup.POST("/create", middleware.RateLimit("post:create", 0.1, 3, middleware.UserIDKey), container.PostHandler.CreatePost)
-			postGroup.GET("/my", container.PostHandler.GetMyPostList)
-			postGroup.PUT("/:id", container.PostHandler.UpdatePost)
-			postGroup.DELETE("/:id", container.PostHandler.DeletePost)
-		}
-
-		// ---- 评论模块 /auth/comment ----
-		commentGroup := auth.Group("/comment")
-		{
-			commentGroup.POST("/create", container.CommentHandler.CreateComment)
-			commentGroup.DELETE("/:id", container.CommentHandler.DeleteComment)
-			commentGroup.PUT("/:id", container.CommentHandler.UpdateComment)
-			commentGroup.GET("/my", container.CommentHandler.GetUserComments)
-		}
-
-		// ---- 互动模块：点赞、踩、收藏、分享 /auth/interact ----
-		interactGroup := auth.Group("/interact")
-		{
-			interactGroup.POST("/like/:post_id", middleware.RateLimit("interact:like", 5, 10, middleware.UserIDKey), container.InteractHandler.ToggleLike)
-			interactGroup.POST("/dislike/:post_id", container.InteractHandler.ToggleDislike)
-			interactGroup.POST("/collect/:post_id", container.InteractHandler.ToggleCollect)
-			interactGroup.POST("/share/:post_id", container.InteractHandler.Share)
-			interactGroup.GET("/status/:post_id", container.InteractHandler.GetInteractStatus)
-		}
-
-		// ---- 社交关系：关注、拉黑 /auth/social ----
-		socialGroup := auth.Group("/social")
-		{
-			socialGroup.POST("/follow/:uid", container.SocialHandler.FollowUser)
-			socialGroup.POST("/block/:uid", container.SocialHandler.BlockUser)
-			socialGroup.GET("/relation/:uid", container.SocialHandler.GetRelationStatus)
-			socialGroup.GET("/follows", container.SocialHandler.GetFollowList)
-			socialGroup.GET("/followers", container.SocialHandler.GetFollowerList)
-			socialGroup.GET("/blocks", container.SocialHandler.GetBlockList)
 		}
 
 		// ---- 私聊消息模块 /auth/message ----

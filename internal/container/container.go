@@ -8,6 +8,7 @@ import (
 
 	"go-admin/config"
 	"go-admin/internal/dao"
+	"go-admin/internal/domain/model"
 	"go-admin/internal/handler"
 	"go-admin/internal/service"
 	"go-admin/pkg/core"
@@ -26,21 +27,13 @@ type Container struct {
 
 	UserService *service.UserService
 	UserHandler *handler.UserHandler
-	PostService *service.PostService
-	PostHandler *handler.PostHandler
 
-	WSService       *service.WSService
-	WSHandler       *handler.WSHandler
-	CommentService  *service.CommentService
-	CommentHandler  *handler.CommentHandler
-	MessageService  *service.MessageService
-	MessageHandler  *handler.MessageHandler
-	SocialService   *service.SocialService
-	SocialHandler   *handler.SocialHandler
-	InteractService *service.InteractService
-	InteractHandler *handler.InteractHandler
-	GroupHandler    *handler.GroupHandler
-	GroupService    *service.GroupService
+	WSService      *service.WSService
+	WSHandler      *handler.WSHandler
+	MessageService *service.MessageService
+	MessageHandler *handler.MessageHandler
+	GroupHandler   *handler.GroupHandler
+	GroupService   *service.GroupService
 
 	// 生命周期管理（优雅关闭 / MQ 重连）
 	Rabbit         *core.RabbitMQ
@@ -56,13 +49,12 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 
 	userDB := &dao.GormUserDB{DB: db}
 	userCache := &dao.RedisUserCache{Client: redisClient}
-	postRepo := dao.NewGormPostRepository(db)
-	commentRepo := dao.NewGormCommentRepository(db)
-	interactRepo := dao.NewGormInteractRepository(db)
-	socialRepo := dao.NewGormSocialRepository(db)
 	messageRepo := dao.NewGormMessageRepository(db)
 	outboxRepo := dao.NewGormOutboxRepository(db)
-	jwtCfg := &dao.DefaultJWTConfig{Secret: jwtSecret}
+	jwtCfg := &dao.DefaultJWTConfig{
+		Secret:      jwtSecret,
+		ExpireHours: time.Duration(cfg.GetJwtConfig().ExpireHours) * time.Hour,
+	}
 	groupRepo := dao.NewGormGroupRepository(db)
 	instanceID := resolveInstanceID()
 	instanceQueue := fmt.Sprintf("%s.%s", cfg.RabbitMQ.Queue, instanceID)
@@ -78,8 +70,6 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 
 	userService := service.NewUserService(userDB, userCache, jwtCfg, jwtSecret, presenceService)
 	userHandler := handler.NewUserHandler(userService)
-	postService := service.NewPostService(postRepo, userCache)
-	postHandler := handler.NewPostHandler(postService)
 	wsService := service.NewWSService(messageRepo, groupRepo, groupMessagePublisher, presenceService, groupCacheService, userCache, ctx, jwtSecret)
 	// 用户角色/权限变更 → 强制断开其 WS（踢下线），presence 随之清理在线状态
 	userService.SetOnUserKicked(func(userID uint) { wsService.KickUser(userID) })
@@ -101,9 +91,6 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 		}
 	})
 
-	commentService := service.NewCommentService(commentRepo)
-	commentHandler := handler.NewCommentHandler(commentService)
-	// 已读回执：sender 发给 reader 的消息被 reader 已读后，给 sender 推 WS 事件 "message.read"
 	messageService := service.NewMessageService(messageRepo, userCache, func(senderUID uint, readerUID uint, messageIDs []uint) {
 		wsService.SendToUser(senderUID, map[string]interface{}{
 			"type": "message.read",
@@ -113,12 +100,20 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 				"read_at":     time.Now(),
 			},
 		})
+	}, func(msg *model.Message) {
+		// HTTP 私信落库后实时推给收件人（离线静默，sync 兜底）
+		wsService.SendToUser(msg.ToUID, map[string]interface{}{
+			"type": "message",
+			"data": map[string]interface{}{
+				"id":         msg.ID,
+				"from_uid":   msg.FromUID,
+				"to_uid":     msg.ToUID,
+				"content":    msg.Content,
+				"created_at": msg.CreatedAt.Format(time.RFC3339),
+			},
+		})
 	})
 	messageHandler := handler.NewMessageHandler(messageService)
-	socialService := service.NewSocialService(socialRepo)
-	socialHandler := handler.NewSocialHandler(socialService)
-	interactService := service.NewInteractService(interactRepo, userCache)
-	interactHandler := handler.NewInteractHandler(interactService)
 	groupService := service.NewGroupService(groupRepo)
 	groupHandler := handler.NewGroupHandler(groupService)
 	return &Container{
@@ -129,18 +124,10 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 		JWTSecret:       jwtSecret,
 		UserService:     userService,
 		UserHandler:     userHandler,
-		PostService:     postService,
-		PostHandler:     postHandler,
 		WSService:       wsService,
 		WSHandler:       wsHandler,
-		CommentService:  commentService,
-		CommentHandler:  commentHandler,
 		MessageService:  messageService,
 		MessageHandler:  messageHandler,
-		SocialService:   socialService,
-		SocialHandler:   socialHandler,
-		InteractService: interactService,
-		InteractHandler: interactHandler,
 		GroupHandler:    groupHandler,
 		GroupService:    groupService,
 		Rabbit:          rabbit,

@@ -2,6 +2,7 @@ package service
 
 import (
 	"go-admin/internal/domain/model"
+	"go-admin/internal/dto"
 	"go-admin/pkg/core"
 	"net/http"
 	"strings"
@@ -31,8 +32,18 @@ func (s *GroupService) SendGroupMessage(userID, groupID uint, content string) (*
 		SenderUID: userID,
 		Content:   content,
 	}
-
-	if err := s.groupRepo.CreateGroupMessage(message); err != nil {
+	// 与 WS 路径一致：同一事务写消息 + outbox，relay 发布后由 consumer 实时广播给在线成员
+	event := dto.GroupMessageCreatedEvent{
+		Type:    "group_message_created",
+		GroupID: groupID,
+		FromUID: userID,
+		Content: content,
+	}
+	if err := s.groupRepo.CreateGroupMessageWithOutboxBuilder(message, func(saved *model.ChatGroupMessage) (*model.MessageOutbox, error) {
+		event.MessageID = saved.ID
+		event.CreatedAt = saved.CreatedAt
+		return buildGroupMessageOutbox(event)
+	}); err != nil {
 		return nil, core.NewBizError(http.StatusInternalServerError, "send group message failed")
 	}
 

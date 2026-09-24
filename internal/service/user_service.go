@@ -309,7 +309,7 @@ func (s *UserService) Login(ctx context.Context, username string, password strin
 		return "", "", core.NewBizError(http.StatusBadRequest, "username or password is incorrect")
 	}
 
-	expirationTime := time.Now().Add(1 * time.Hour)
+	expirationTime := time.Now().Add(s.jwtCfg.GetExpireHours())
 	claims := &Claims{
 		UserId:   user.ID,
 		Username: user.Username,

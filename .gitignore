@@ -36,3 +36,7 @@ r.md
 # Docker Compose 环境变量（真实密码放 .env，模板见 .env.example）
 .env
 .env.local
+
+# Local built binaries (no extension leftovers)
+/di-server
+/server

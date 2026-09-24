@@ -158,13 +158,15 @@ func (c *GroupMessageConsumer) handleDelivery(ctx context.Context, d amqp091.Del
 		return nil
 	}
 
-	out, err := json.Marshal(dto.WSOutboundMessage{
-		Type:      "group_message",
-		MessageID: event.MessageID,
-		GroupID:   event.GroupID,
-		FromUID:   event.FromUID,
-		Content:   event.Content,
-		Time:      event.CreatedAt.Format(time.RFC3339),
+	out, err := json.Marshal(map[string]interface{}{
+		"type": "group_message_created",
+		"data": map[string]interface{}{
+			"id":         event.MessageID,
+			"group_id":   event.GroupID,
+			"user_id":    event.FromUID,
+			"content":    event.Content,
+			"created_at": event.CreatedAt.Format(time.RFC3339),
+		},
 	})
 	if err != nil {
 		_ = c.clearProcessing(ctx, dedupeKey)

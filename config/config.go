@@ -50,8 +50,8 @@ type RedisConfig struct {
 }
 
 type JwtConfig struct {
-	Secret      string        `mapstructure:"secret"`
-	ExpireHours time.Duration `mapstructure:"expire_hours"`
+	Secret      string `mapstructure:"secret"`
+	ExpireHours int    `mapstructure:"expire_hours"` // 单位：小时（YAML 里写 24 = 24 小时）
 }
 
 type RabbitMQConfig struct {

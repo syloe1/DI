@@ -24,12 +24,6 @@ type WSClient struct {
 	closed uint32 //原子标记 0 为关闭， 1 已关闭
 }
 
-// 待落库的任务
-type persistTask struct {
-	msg      *model.Message
-	groupMsg *model.ChatGroupMessage
-	event    *dto.GroupMessageCreatedEvent
-}
 type WSHub struct {
 	Clients    map[uint]*WSClient
 	Register   chan *WSClient
@@ -43,14 +37,10 @@ type WSHub struct {
 	GroupCache  *GroupCacheService
 	Cache       dao.UserCache
 	Ctx         context.Context
-
-	persistCh chan persistTask //有缓冲， 削峰
-	workers   int
-	done      chan struct{}
 }
 
 func NewWSHub(messageRepo dao.MessageRepository, groupRepo dao.GroupRepository, publisher GroupMessagePublisher, presence *PresenceService, groupCache *GroupCacheService, cache dao.UserCache, ctx context.Context) *WSHub {
-	h := &WSHub{
+	return &WSHub{
 		Clients:     make(map[uint]*WSClient),
 		Register:    make(chan *WSClient),
 		Unregister:  make(chan *WSClient),
@@ -61,34 +51,6 @@ func NewWSHub(messageRepo dao.MessageRepository, groupRepo dao.GroupRepository, 
 		GroupCache:  groupCache,
 		Cache:       cache,
 		Ctx:         ctx,
-		persistCh:   make(chan persistTask, 4096),
-		done:        make(chan struct{}),
-		workers:     16,
-	}
-	for i := 0; i < h.workers; i++ {
-		go h.persistWorker()
-	}
-	return h
-}
-func (h *WSHub) persistWorker() {
-	for {
-		select {
-		case <-h.done:
-			return
-		case task := <-h.persistCh:
-			if task.msg != nil {
-				if err := h.MessageRepo.CreateMessage(task.msg); err != nil {
-					core.Z().Errorf("save message failed: %v", err)
-				}
-			} else {
-				_ = h.GroupRepo.CreateGroupMessageWithOutboxBuilder(task.groupMsg,
-					func(saved *model.ChatGroupMessage) (*model.MessageOutbox, error) {
-						task.event.MessageID = saved.ID
-						task.event.CreatedAt = saved.CreatedAt
-						return buildGroupMessageOutbox(*task.event)
-					})
-			}
-		}
 	}
 }
 func (h *WSHub) Run() {
@@ -263,6 +225,9 @@ func (c *WSClient) readPump() {
 		if err != nil {
 			return
 		}
+		// 客户端用 JSON 文本帧 {type:"ping"} 保活（非协议层 Ping），
+		// 每收到任意帧都要重置读超时，否则 60s 后误断连
+		_ = c.Conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 
 		var msgData dto.WSInboundMessage
 		if err := json.Unmarshal(message, &msgData); err != nil {
@@ -281,8 +246,7 @@ func (c *WSClient) readPump() {
 }
 
 func (c *WSClient) handleMessage(toUID uint, content string) {
-	_, err := c.Hub.MessageRepo.FindUserByID(toUID)
-	if err != nil {
+	if _, err := c.Hub.MessageRepo.FindUserByID(toUID); err != nil {
 		c.sendWSError("user not found")
 		return
 	}
@@ -293,31 +257,34 @@ func (c *WSClient) handleMessage(toUID uint, content string) {
 		Content: content,
 		IsRead:  false,
 	}
-	select {
-	case c.Hub.persistCh <- persistTask{msg: message}:
-	default:
-		core.Metrics.PushDroppedSlow.Add(1) // 持久化队列也满了，背压保护
+	// 同步落库拿到 id，再按前端契约推 data 包裹的标准帧（与 HTTP 路径一致）
+	if err := c.Hub.MessageRepo.CreateMessage(message); err != nil {
+		core.Z().Errorf("save message failed: %v", err)
+		c.sendWSError("send message failed")
 		return
 	}
-	// if err := c.Hub.MessageRepo.CreateMessage(message); err != nil {
-	// 	core.Z().Errorf("save message failed: %v", err)
-	// 	return
-	// }
 
 	now := time.Now().Format(time.RFC3339)
-	receiverMsg, _ := marshalWithPool(dto.WSOutboundMessage{
-		Type:    "message",
-		FromUID: c.UserID,
-		Content: content,
-		Time:    now,
+	receiverMsg, _ := marshalWithPool(map[string]interface{}{
+		"type": "message",
+		"data": map[string]interface{}{
+			"id":         message.ID,
+			"from_uid":   c.UserID,
+			"to_uid":     toUID,
+			"content":    content,
+			"created_at": now,
+		},
 	})
 	c.Hub.SendMessageToUser(toUID, receiverMsg)
 
-	confirmMsg, _ := marshalWithPool(dto.WSOutboundMessage{
-		Type:    "message_sent",
-		ToUID:   toUID,
-		Content: content,
-		Time:    now,
+	confirmMsg, _ := marshalWithPool(map[string]interface{}{
+		"type": "message_sent",
+		"data": map[string]interface{}{
+			"id":         message.ID,
+			"to_uid":     toUID,
+			"content":    content,
+			"created_at": now,
+		},
 	})
 	c.Hub.SendMessageToUser(c.UserID, confirmMsg)
 }

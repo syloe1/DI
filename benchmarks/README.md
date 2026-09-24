@@ -25,15 +25,15 @@ http://127.0.0.1:19999
 ## Smoke Test
 
 ```bash
-go run ./cmd/bench -mode=http -url=http://127.0.0.1:19999/post/list -c=10 -n=100
+go run ./cmd/bench -mode=http -url=http://127.0.0.1:19999/user/online/list -c=10 -n=100
 ```
 
 ## HTTP Read Baseline
 
 ```bash
-go run ./cmd/bench -mode=http -url=http://127.0.0.1:19999/post/list -c=50 -n=5000
-go run ./cmd/bench -mode=http -url=http://127.0.0.1:19999/post/list -c=100 -n=10000
-go run ./cmd/bench -mode=http -url=http://127.0.0.1:19999/post/list -c=200 -n=20000
+go run ./cmd/bench -mode=http -url=http://127.0.0.1:19999/user/online/list -c=50 -n=5000
+go run ./cmd/bench -mode=http -url=http://127.0.0.1:19999/user/online/list -c=100 -n=10000
+go run ./cmd/bench -mode=http -url=http://127.0.0.1:19999/user/online/list -c=200 -n=20000
 ```
 
 Record:
@@ -120,6 +120,6 @@ use 1000 req/s as the safe production planning value.
 
 | Date | Scenario | Concurrency | Total | RPS | p50 | p95 | p99 | Errors | Notes |
 | --- | --- | ---: | ---: | ---: | --- | --- | --- | ---: | --- |
-| TBD | HTTP post list | 50 | 5000 | TBD | TBD | TBD | TBD | TBD | TBD |
+| TBD | HTTP online list | 50 | 5000 | TBD | TBD | TBD | TBD | TBD | TBD |
 | TBD | Group message send | 20 | 1000 | TBD | TBD | TBD | TBD | TBD | TBD |
 | TBD | WebSocket ping | 50 | 1000 | TBD | TBD | TBD | TBD | TBD | TBD |

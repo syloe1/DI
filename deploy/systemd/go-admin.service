@@ -1,0 +1,70 @@
+# =============================================================================
+# go-admin systemd 单元 —— 裸机部署（不使用 Docker）
+# =============================================================================
+# 安装：
+#   sudo cp deploy/systemd/go-admin.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now go-admin
+#
+# 完整步骤见 docs/deploy-native.md，配置项说明见 deploy/go-admin.env.example。
+#
+# 代码决定的硬约束（改了会启动失败，不要随意动）：
+#   1. WorkingDirectory 必须是应用根目录 —— cmd/server/main.go 用相对路径读取
+#      config/config.yaml，CWD 不对会直接 Fatalf 退出。
+#   2. 密码/密钥只走 EnvironmentFile，不要写进 config.yaml（该文件每次部署可覆盖）。
+#   3. config.yaml 中必须保留所有「可被环境变量覆盖的键」（值可以是空串），
+#      否则 viper 的 AutomaticEnv + Unmarshal 对该键静默失效 —— 详见
+#      docs/deploy-native.md「环境变量为什么不生效」。
+
+[Unit]
+Description=DI Go API server (go-admin)
+Documentation=file:///opt/go-admin/docs/deploy-native.md
+After=network-online.target
+Wants=network-online.target
+# 中间件（MySQL/Redis/RabbitMQ）由服务器上已有的实例提供。这里不写
+# After=mysql.service 之类的依赖：单元名随发行版而异（mysql.service /
+# mysqld.service / mariadb.service），而对不存在的单元用 Wants= 会产生
+# 告警；真正的兜底是下面的 Restart=always。
+# StartLimitIntervalSec=0 关闭重启频率限制，避免中间件慢启动时被 systemd
+# 判定为「反复失败」而放弃重启。
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=go-admin
+Group=go-admin
+WorkingDirectory=/opt/go-admin
+EnvironmentFile=/opt/go-admin/go-admin.env
+# Go GC 软内存上限。2C2G 机器上防止堆无限增长；按实际占用调整。
+Environment=GOMEMLIMIT=256MiB
+ExecStart=/opt/go-admin/go-admin
+
+# 中间件未就绪时应用会启动即失败，靠自动重启兜底（首次部署/中间件重启时常见）
+Restart=always
+RestartSec=5s
+# 优雅关闭：给足 main.go 里 10s 的排空窗口（外加少量余量）
+TimeoutStopSec=20s
+
+# 应用日志只写 stdout（pkg/core/logger.go），交给 journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=go-admin
+# 查看日志：journalctl -u go-admin -f
+
+# ---- 最小权限加固 ----
+# 纯静态二进制（CGO_ENABLED=0），只需读自身目录 + 出站 TCP，不需要任何写权限
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
