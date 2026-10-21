@@ -137,6 +137,8 @@ func (s *GroupService) KickMember(operatorUID, groupID, targetUID uint) error {
 	if err := s.groupRepo.UpdateMember(target); err != nil {
 		return core.NewBizError(http.StatusInternalServerError, "kick member failed")
 	}
+	// 让被踢成员立即从 active 成员缓存中移除，不再收到群消息推送
+	s.refreshMembershipCache(groupID)
 
 	return nil
 }
@@ -224,6 +226,7 @@ func (s *GroupService) LeaveGroup(userID, groupID uint) error {
 	if err := s.groupRepo.UpdateMember(member); err != nil {
 		return core.NewBizError(http.StatusInternalServerError, "leave group failed")
 	}
+	s.refreshMembershipCache(groupID)
 
 	return nil
 }

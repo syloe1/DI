@@ -109,6 +109,7 @@ func (s *GroupService) ReviewInvitation(inviteeUID, invitationID uint, action st
 		if err := s.groupRepo.AcceptInvitation(invitation, member); err != nil {
 			return core.NewBizError(http.StatusInternalServerError, "accept invitation failed")
 		}
+		s.refreshMembershipCache(invitation.GroupID)
 
 	case "reject":
 		invitation.Status = model.ChatGroupInvitationStatusRejected

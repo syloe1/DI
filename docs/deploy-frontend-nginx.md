@@ -63,6 +63,19 @@ systemctl daemon-reload && systemctl enable go-admin
 > ⚠ viper 陷阱：`config.yaml` 里没声明的键，`APP_*` 环境变量设了也**静默失效**。
 > 必须从 `config.example.yaml` 复制，且不删键。详见 deploy-native.md 第 5 节。
 
+首次启动后执行一次演示种子数据（面试演示必做，幂等）：
+
+```bash
+# ⚠ 先确认 /opt/go-admin/config/config.yaml 里有 auth / demo 段
+#   （从新的 config.example.yaml 复制或手动追加；viper 对未声明的键会静默忽略环境变量）
+set -a; . /opt/go-admin/go-admin.env; set +a
+/opt/go-admin/seed -config /opt/go-admin/config/config.yaml
+```
+
+- 登录页会出现「体验 Demo（免注册）」按钮（`APP_DEMO_ENABLED=true` 时）
+- 公网环境建议同时设置 `APP_AUTH_REGISTER_INVITE_CODE`，注册必须带邀请码
+- 评审遗留测试账号清理：`/opt/go-admin/seed -purge-users-prefix review_ -yes`
+
 ## 4. 前端 Nginx（一次性准备）
 
 ```bash
@@ -81,6 +94,11 @@ Nginx 行为与 vite 开发代理一致（[vite.config.ts](../../DI-Web/vite.con
 - `/ws` → WebSocket 升级转发到后端
 - 前端静态资源带 hash 长缓存 30 天；SPA 路由回退 `index.html`
 
+> 已针对「`/api` 301 到 HTTP」问题加固：`absolute_redirect off` +
+> `location = /api` 308 相对跳转 + `proxy_redirect off`，跳转不再暴露内部 host、
+> 也不会把 HTTPS 降级。若前面还有 SLB/CDN 终止 TLS，请确认转发
+> `X-Forwarded-Proto: https`。HTTPS 模板已写在 `deploy/nginx/di-web.conf` 末尾。
+
 > 已在本机用真实 nginx 容器 + 真实构建产物验证过这套配置：首页、SPA 回退、
 > `/api/healthz`、`/api/user/login`、WebSocket 升级全部通过。
 
@@ -92,8 +110,13 @@ Nginx 行为与 vite 开发代理一致（[vite.config.ts](../../DI-Web/vite.con
 # 后端：交叉编译 → 上传（先传 .new 再 mv，避免覆盖运行中二进制的 ETXTBSY）
 $env:CGO_ENABLED='0'; $env:GOOS='linux'; $env:GOARCH='amd64'
 go build -trimpath -o dist/go-admin ./cmd/server
+go build -trimpath -o dist/seed ./cmd/seed
 scp dist/go-admin root@<server>:/opt/go-admin/go-admin.new
-ssh root@<server> "chmod 755 /opt/go-admin/go-admin.new && mv /opt/go-admin/go-admin.new /opt/go-admin/go-admin && systemctl restart go-admin"
+scp dist/seed root@<server>:/opt/go-admin/seed.new
+ssh root@<server> "chmod 755 /opt/go-admin/go-admin.new /opt/go-admin/seed.new && mv /opt/go-admin/go-admin.new /opt/go-admin/go-admin && mv /opt/go-admin/seed.new /opt/go-admin/seed && systemctl restart go-admin"
+
+# 演示数据（首次/需要重置时）：幂等，可重复执行
+ssh root@<server> "set -a; . /opt/go-admin/go-admin.env; set +a; /opt/go-admin/seed -config /opt/go-admin/config/config.yaml"
 
 # 前端：构建 → 打包 → 上传 → 解压 → reload
 cd ..\DI-Web
@@ -102,6 +125,8 @@ tar -czf ..\DI\dist\di-web-dist.tar.gz dist
 scp ..\DI\dist\di-web-dist.tar.gz root@<server>:/tmp/
 ssh root@<server> "tar -xzf /tmp/di-web-dist.tar.gz -C /var/www/di-web && rm /tmp/di-web-dist.tar.gz && systemctl reload nginx"
 ```
+
+> 也可以直接用 `./deploy/build-native.sh root@<server>`（加 `SEED=1` 自动写演示数据）。
 
 > 后端是二进制替换，前端是静态文件替换，两者互相独立、互不影响回滚。
 
@@ -117,7 +142,9 @@ curl -sS http://127.0.0.1:19999/readyz       # {"status":"ok"} = MySQL+Redis 都
 curl -sS http://127.0.0.1/                   # index.html
 curl -sS http://127.0.0.1/api/healthz        # {"code":200,...,"status":"ok"}
 curl -sS -X POST http://127.0.0.1/api/user/login -H 'Content-Type: application/json' \
-  -d '{"username":"<测试用户>","password":"<密码>"}'   # 返回 token = 全链路通
+  -d '{"username":"demo","password":"Demo@123456"}'   # 返回 token = 全链路通
+curl -sS -X POST http://127.0.0.1/api/user/demo-login # 返回 token = 体验 Demo 可用
+curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1/api   # 308（相对跳转，非 301）
 ```
 
 ## 7. 安全组 / 防火墙
@@ -132,6 +159,8 @@ curl -sS -X POST http://127.0.0.1/api/user/login -H 'Content-Type: application/j
 | --- | --- | --- |
 | 前端能打开但接口 502 | nginx 连不上后端 | `ss -lntp \| grep 19999` 确认进程在；`curl 127.0.0.1:19999/healthz` 直连对比 |
 | 接口 401/403 | 代理路径没去前缀或鉴权失败 | 确认 `proxy_pass http://127.0.0.1:19999/;` 尾部斜杠（去 /api 前缀的关键） |
+| `/api` 301/308 跳到内部地址或 http | 代理层重定向未用相对路径 | 已用 `absolute_redirect off` + `location = /api` 308 修复；若前面有 CDN/SLB，确认转发 `X-Forwarded-Proto: https` |
+| 登录后是空应用 | 未执行演示种子 | 执行 `/opt/go-admin/seed -config ...`；确认 `APP_DEMO_ENABLED=true` |
 | WebSocket 连不上 | 缺升级头 | 确认 `/ws` location 有 `proxy_set_header Upgrade/Connection` |
 | 刷新页面 404 | SPA 回退没配 | 确认 `try_files $uri $uri/ /index.html;` |
 | 服务反复重启 | 中间件没就绪 | `journalctl -u go-admin` 定位；首次部署迁移与监听并发，有极短建表窗口 |

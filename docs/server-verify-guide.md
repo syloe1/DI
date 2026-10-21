@@ -116,14 +116,33 @@ curl -sS http://127.0.0.1:19999/auth/user/list -H "Authorization: Bearer $TOKEN"
 
 **预期**：HTTP 200 + JSON（内容可以是空列表），**不能是 500**。
 
-### 6. 公开查询接口（读 users 表，应正常）
+### 6. 用户查询接口（需要登录；未登录应 401）
+
+P0 安全修复后，用户搜索/在线状态不再是公开接口，必须带 token：
 
 ```bash
-curl -sS -w '\nHTTP %{http_code}\n' http://127.0.0.1:19999/user/online/list
-curl -sS -w '\nHTTP %{http_code}\n' 'http://127.0.0.1:19999/user/search?kw=probe'
+TOKEN='<第 4 步返回的 token>'
+
+# 未登录：预期 401（不再是 200）
+curl -sS -o /dev/null -w 'no-token online: %{http_code}\n' http://127.0.0.1:19999/user/online/list
+
+# 登录后：预期 200
+curl -sS -w '\nHTTP %{http_code}\n' http://127.0.0.1:19999/auth/user/online/list \
+  -H "Authorization: Bearer $TOKEN"
+curl -sS -w '\nHTTP %{http_code}\n' 'http://127.0.0.1:19999/auth/user/search?username=probe' \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
-**预期**：HTTP 200（内容可为空列表/空对象），**不能是 500**。
+**预期**：未登录 401、登录后 HTTP 200，**不能是 500**。
+
+### 6.1 登出后 token 立即失效（P1 修复验证）
+
+```bash
+curl -sS -X POST http://127.0.0.1:19999/auth/user/logout -H "Authorization: Bearer $TOKEN"
+# 预期 401（旧 token 已被 Redis 黑名单吊销）
+curl -sS -o /dev/null -w 'after logout: %{http_code}\n' \
+  http://127.0.0.1:19999/auth/message/conversations -H "Authorization: Bearer $TOKEN"
+```
 
 ### 7. RabbitMQ 连接确认
 

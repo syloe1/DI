@@ -15,6 +15,8 @@ type App struct {
 	Mysql    MysqlConfig    `mapstructure:"mysql"`
 	Redis    RedisConfig    `mapstructure:"redis"`
 	Jwt      JwtConfig      `mapstructure:"jwt"`
+	Auth     AuthConfig     `mapstructure:"auth"`
+	Demo     DemoConfig     `mapstructure:"demo"`
 	RabbitMQ RabbitMQConfig `mapstructure:"rabbitmq"`
 	Logger   LoggerConfig   `mapstructure:"logger"`
 }
@@ -52,6 +54,19 @@ type RedisConfig struct {
 type JwtConfig struct {
 	Secret      string `mapstructure:"secret"`
 	ExpireHours int    `mapstructure:"expire_hours"` // 单位：小时（YAML 里写 24 = 24 小时）
+}
+
+// AuthConfig 注册/认证相关配置。
+// RegisterInviteCode 非空时，注册接口必须携带相同的邀请码（演示/生产环境防批量注册）。
+type AuthConfig struct {
+	RegisterInviteCode string `mapstructure:"register_invite_code"`
+}
+
+// DemoConfig 演示账号配置：开启后前端登录页会出现「体验 Demo」入口，
+// 可直接登录预置的只读演示账号（需先用 cmd/seed 写入种子数据）。
+type DemoConfig struct {
+	Enabled  bool   `mapstructure:"enabled"`
+	Username string `mapstructure:"username"`
 }
 
 type RabbitMQConfig struct {
@@ -129,6 +144,12 @@ func (c *JwtConfig) applyDefaults() {
 	}
 }
 
+func (c *DemoConfig) applyDefaults() {
+	if c.Username == "" {
+		c.Username = "demo"
+	}
+}
+
 func (c *LoggerConfig) applyDefaults() {
 	if c.Level == "" {
 		c.Level = "info"
@@ -180,6 +201,7 @@ func (c *App) applyDefaults() {
 	c.Mysql.applyDefaults()
 	c.Redis.applyDefaults()
 	c.Jwt.applyDefaults()
+	c.Demo.applyDefaults()
 	c.Logger.applyDefaults()
 }
 
@@ -244,8 +266,10 @@ func (c RabbitMQConfig) GoString() string {
 // =============================================================================
 
 func (c *App) GetMysqlConfig() MysqlConfig   { return c.Mysql }
-func (c *App) GetRedisConfig() RedisConfig    { return c.Redis }
-func (c *App) GetServerConfig() ServerConfig  { return c.Server }
-func (c *App) GetJwtConfig() JwtConfig        { return c.Jwt }
-func (c *App) GetCORSOrigins() []string       { return c.Server.CORSOrigins }
-func (c *App) GetLoggerConfig() LoggerConfig  { return c.Logger }
+func (c *App) GetRedisConfig() RedisConfig   { return c.Redis }
+func (c *App) GetServerConfig() ServerConfig { return c.Server }
+func (c *App) GetJwtConfig() JwtConfig       { return c.Jwt }
+func (c *App) GetAuthConfig() AuthConfig     { return c.Auth }
+func (c *App) GetDemoConfig() DemoConfig     { return c.Demo }
+func (c *App) GetCORSOrigins() []string      { return c.Server.CORSOrigins }
+func (c *App) GetLoggerConfig() LoggerConfig { return c.Logger }

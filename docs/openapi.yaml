@@ -72,6 +72,9 @@ paths:
     post:
       tags: [User]
       summary: 用户注册
+      description: |
+        每 IP 20 秒限流 1 次（连续注册第二个请求返回 429）。
+        服务端配置了 auth.register_invite_code 时，请求必须携带相同 invite_code，否则 403。
       security: []
       requestBody:
         required: true
@@ -111,11 +114,11 @@ paths:
                       data:
                         $ref: "#/components/schemas/LoginResponse"
 
-  /user/search:
+  # P0 安全修复：用户搜索 / 在线状态需要登录，避免未认证枚举用户与在线状态
+  /auth/user/search:
     get:
       tags: [User]
-      summary: 按用户名搜索用户
-      security: []
+      summary: 按用户名搜索用户（需登录）
       parameters:
         - name: username
           in: query
@@ -125,37 +128,72 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/OK"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
-  /user/online/list:
+  /auth/user/online/list:
     get:
       tags: [User]
-      summary: 获取在线用户列表
-      security: []
+      summary: 获取在线用户列表（需登录）
       responses:
         "200":
           $ref: "#/components/responses/OK"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
-  /user/{id}/online:
+  /auth/user/{id}/online:
     get:
       tags: [User]
-      summary: 查询指定用户在线状态
-      security: []
+      summary: 查询指定用户在线状态（需登录）
       parameters:
         - $ref: "#/components/parameters/UserID"
       responses:
         "200":
           $ref: "#/components/responses/OK"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
-  /user/{id}:
+  /user/register/config:
     get:
       tags: [User]
-      summary: 查询用户资料
+      summary: 注册页公开配置
+      description: 前端据此决定是否显示邀请码输入框 / 「体验 Demo」入口。
       security: []
-      parameters:
-        - $ref: "#/components/parameters/UserID"
       responses:
         "200":
-          $ref: "#/components/responses/OK"
+          description: 返回 invite_required / demo_enabled
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/RegisterConfig"
+
+  /user/demo-login:
+    post:
+      tags: [User]
+      summary: 体验 Demo（免密登录预置演示账号）
+      description: 需要服务端 demo.enabled=true 且已执行 cmd/seed；否则返回 404。
+      security: []
+      responses:
+        "200":
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/LoginResponse"
+        "404":
+          description: 演示登录未开启 / 演示账号未初始化
+        "429":
+          description: 请求过于频繁
 
   /auth/user/list:
     get:
@@ -170,7 +208,8 @@ paths:
   /auth/user/logout:
     post:
       tags: [User]
-      summary: 用户退出登录
+      summary: 用户退出登录（服务端吊销当前 JWT）
+      description: 登出后当前 token 会被写入 Redis 黑名单，再次使用立即返回 401。
       responses:
         "200":
           $ref: "#/components/responses/OK"
@@ -699,6 +738,7 @@ paths:
     get:
       tags: [Group]
       summary: 获取当前用户加入的群组
+      description: 只返回 status=normal 的群；已解散的群不会出现在普通列表里。
       responses:
         "200":
           $ref: "#/components/responses/OK"
@@ -707,16 +747,22 @@ paths:
     get:
       tags: [Group]
       summary: 获取群详情
+      description: 群已解散时返回 410 Gone；群不存在返回 404。
       parameters:
         - $ref: "#/components/parameters/GroupID"
       responses:
         "200":
           $ref: "#/components/responses/OK"
+        "404":
+          description: 群不存在
+        "410":
+          description: 群已解散
 
   /auth/groups/{id}/members:
     get:
       tags: [Group]
       summary: 获取群成员列表
+      description: 每项直接包含 username（后端批量查询，前端不需要再逐成员补资料）。
       parameters:
         - $ref: "#/components/parameters/GroupID"
       responses:
@@ -888,6 +934,7 @@ paths:
     get:
       tags: [Group]
       summary: 获取群消息列表
+      description: 每条消息直接包含 username（发送者用户名），实时推送事件同样携带，刷新前后显示一致。
       parameters:
         - $ref: "#/components/parameters/GroupID"
         - name: page
@@ -925,10 +972,12 @@ paths:
 
         - `{"type":"message","data":{...}}` 收到新私信
         - `{"type":"message_sent","data":{...}}` 私信发送成功回执
-        - `{"type":"group_message_created","data":{...}}` 群消息推送
+        - `{"type":"group_message_created","data":{...}}` 群消息推送（data 含 `username` 与 `user_id`）
         - `{"type":"message.read","data":{"peer_uid":2,"message_ids":[1,2],"read_at":"..."}}` 对方已读回执
         - `{"type":"pong"}` 心跳响应
         - `{"type":"error","data":{"message":"..."}}` 业务错误
+
+        鉴权失败（token 无效 / 已登出被拉黑）时握手直接返回 HTTP 401，不会升级为 WebSocket。
       security: []
       responses:
         "101":
@@ -1039,6 +1088,20 @@ components:
           minLength: 6
           maxLength: 72
           example: "123456"
+        invite_code:
+          type: string
+          maxLength: 64
+          description: 服务端配置 auth.register_invite_code 时必填
+
+    RegisterConfig:
+      type: object
+      properties:
+        invite_required:
+          type: boolean
+          description: 注册是否需要邀请码
+        demo_enabled:
+          type: boolean
+          description: 是否开放「体验 Demo」免密登录
 
     LoginRequest:
       type: object

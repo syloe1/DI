@@ -32,18 +32,25 @@ func marshalWithPool(v interface{}) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// wsTokenRevoker WebSocket 握手时的 token 主动失效检查（与 HTTP 中间件共用实现）。
+type wsTokenRevoker interface {
+	IsRevoked(ctx context.Context, token string, userID uint, issuedAt time.Time) (bool, error)
+}
+
 type WSService struct {
 	hub       *WSHub
 	jwtSecret []byte
+	revoker   wsTokenRevoker
 }
 
-func NewWSService(messageRepo dao.MessageRepository, groupRepo dao.GroupRepository, publisher GroupMessagePublisher, presence *PresenceService, groupCache *GroupCacheService, cache dao.UserCache, ctx context.Context, jwtSecret []byte) *WSService {
+func NewWSService(messageRepo dao.MessageRepository, groupRepo dao.GroupRepository, publisher GroupMessagePublisher, presence *PresenceService, groupCache *GroupCacheService, cache dao.UserCache, ctx context.Context, jwtSecret []byte, revoker wsTokenRevoker) *WSService {
 	hub := NewWSHub(messageRepo, groupRepo, publisher, presence, groupCache, cache, ctx)
 	go hub.Run()
 
 	return &WSService{
 		hub:       hub,
 		jwtSecret: jwtSecret,
+		revoker:   revoker,
 	}
 }
 
@@ -62,6 +69,10 @@ func (s *WSService) AuthenticateToken(token string) (uint, error) {
 
 	claims := jwt.MapClaims{}
 	parsedToken, err := jwt.ParseWithClaims(token, claims, func(token *jwt.Token) (interface{}, error) {
+		// 与 HTTP 中间件保持一致：只接受 HMAC 签名，防算法混淆
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, jwt.ErrSignatureInvalid
+		}
 		return s.jwtSecret, nil
 	})
 	if err != nil || !parsedToken.Valid {
@@ -72,8 +83,26 @@ func (s *WSService) AuthenticateToken(token string) (uint, error) {
 	if !ok || userIDFloat <= 0 {
 		return 0, core.NewBizError(http.StatusUnauthorized, "invalid token payload")
 	}
+	userID := uint(userIDFloat)
 
-	return uint(userIDFloat), nil
+	// 登出/改密后的旧 token 不允许再建立 WS 连接
+	if s.revoker != nil {
+		issuedAt := time.Time{}
+		// 优先毫秒级 iat_ms（新 token），老 token 退回秒级 iat
+		if iatMs, ok := claims["iat_ms"].(float64); ok && iatMs > 0 {
+			issuedAt = time.UnixMilli(int64(iatMs))
+		} else if iat, ok := claims["iat"].(float64); ok {
+			issuedAt = time.Unix(int64(iat), 0)
+		}
+		revoked, checkErr := s.revoker.IsRevoked(context.Background(), token, userID, issuedAt)
+		if checkErr != nil {
+			core.Z().Warnf("check ws token revocation failed: %v", checkErr)
+		} else if revoked {
+			return 0, core.NewBizError(http.StatusUnauthorized, "token revoked")
+		}
+	}
+
+	return userID, nil
 }
 
 func (s *WSService) RegisterConnection(conn *websocket.Conn, userID uint) {

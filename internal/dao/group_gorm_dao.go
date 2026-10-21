@@ -109,6 +109,8 @@ func (r *GormGroupRepository) ListGroupsByUserID(userID uint) ([]GroupWithMember
 		`).
 		Joins("JOIN chat_group_members AS m ON m.group_id = g.id").
 		Where("m.user_id = ? AND m.status = ?", userID, model.ChatGroupMemberStatusActive).
+		// 已解散的群不再出现在「我的群组」普通列表里
+		Where("g.status = ?", model.ChatGroupStatusNormal).
 		Where("g.deleted_at IS NULL AND m.deleted_at IS NULL").
 		Order("m.joined_at DESC").
 		Scan(&groups).Error; err != nil {
@@ -272,6 +274,23 @@ func (r *GormGroupRepository) FindUserByID(userID uint) (*model.User, error) {
 		return nil, err
 	}
 	return &user, nil
+}
+
+// FindUsersByIDs 批量查用户，返回 id -> *User（一次 IN 查询替代 N 次单查）。
+func (r *GormGroupRepository) FindUsersByIDs(userIDs []uint) (map[uint]*model.User, error) {
+	result := make(map[uint]*model.User, len(userIDs))
+	if len(userIDs) == 0 {
+		return result, nil
+	}
+
+	var users []model.User
+	if err := r.db.Where("id IN ?", userIDs).Find(&users).Error; err != nil {
+		return nil, err
+	}
+	for i := range users {
+		result[users[i].ID] = &users[i]
+	}
+	return result, nil
 }
 func (r *GormGroupRepository) TransferOwner(group *model.ChatGroup, oldOwner *model.ChatGroupMember, newOwner *model.ChatGroupMember) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {

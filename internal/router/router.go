@@ -42,14 +42,17 @@ func InitDependencyInjectionRouter(container *container.Container) *gin.Engine {
 		})
 
 		// 用户登录注册
-		public.POST("/user/register", middleware.RateLimit("register", 1.0/30.0, 2, middleware.ClientIPKey), container.UserHandler.Register)
+		// 注册限流收紧为「每 IP 20 秒 1 次」：连续批量注册第二次立即 429。
+		// 演示/公网环境再叠加邀请码（APP_AUTH_REGISTER_INVITE_CODE）。
+		public.POST("/user/register", middleware.RateLimit("register", 1.0/20.0, 1, middleware.ClientIPKey), container.UserHandler.Register)
 		public.POST("/user/login", middleware.RateLimit("login", 1, 5, middleware.ClientIPKey), container.UserHandler.Login)
+		// 注册页配置（是否要邀请码 / 是否开放体验 Demo），无需登录
+		public.GET("/user/register/config", container.UserHandler.RegisterConfig)
+		// 体验 Demo：免密登录只读演示账号（demo.enabled=true 且已 seed 时可用）
+		public.POST("/user/demo-login", middleware.RateLimit("demo-login", 0.5, 3, middleware.ClientIPKey), container.UserHandler.DemoLogin)
 
-		// 用户公开信息
-		public.GET("/user/search", container.UserHandler.SearchUser)
-		public.GET("/user/online/list", container.UserHandler.GetOnlineUsers)
-		public.GET("/user/:id/online", container.UserHandler.GetUserOnlineStatus)
-		public.GET("/user/:id", container.UserHandler.GetUser)
+		// 注意：用户搜索 / 在线状态属于内部数据，已移到 /auth 下（P0 未鉴权修复）。
+		// 公开路由只保留健康检查、注册登录、Demo 入口与 WebSocket。
 
 		// WebSocket 长连接入口
 		public.GET("/ws", container.WSHandler.HandleWebSocket)
@@ -57,12 +60,16 @@ func InitDependencyInjectionRouter(container *container.Container) *gin.Engine {
 
 	// ========== 2. 需要JWT登录鉴权的路由组 /auth ==========
 	auth := r.Group("/auth")
-	auth.Use(middleware.JWTAuth(container.JWTSecret))
+	auth.Use(middleware.JWTAuth(container.JWTSecret, container.TokenRevocation))
 	{
 		// ---- 用户模块 /auth/user ----
 		userGroup := auth.Group("/user")
 		{
 			userGroup.GET("/list", container.UserHandler.GetUserList)
+			// 搜索 / 在线列表需要登录，避免未登录枚举用户与在线状态
+			userGroup.GET("/search", container.UserHandler.SearchUser)
+			userGroup.GET("/online/list", container.UserHandler.GetOnlineUsers)
+			userGroup.GET("/:id/online", container.UserHandler.GetUserOnlineStatus)
 			userGroup.GET("/:id", container.UserHandler.GetUser)
 			userGroup.POST("/logout", container.UserHandler.Logout)
 			userGroup.GET("/batch-roles", container.UserHandler.BatchGetUserRoles)
@@ -84,6 +91,9 @@ func InitDependencyInjectionRouter(container *container.Container) *gin.Engine {
 		// ---- 群聊模块 /auth/groups ----
 		groupGroup := auth.Group("/groups")
 		{
+			// 同时注册 /auth/groups 与 /auth/groups/，避免 gin 307 尾斜杠重定向
+			// （反向代理/HTTPS 下重定向容易暴露内部地址或降级到 http）。
+			groupGroup.POST("", container.GroupHandler.CreateGroup)
 			groupGroup.POST("/", container.GroupHandler.CreateGroup)
 			groupGroup.GET("/my", container.GroupHandler.GetMyGroups)
 			groupGroup.GET("/:id", container.GroupHandler.GetGroupDetail)

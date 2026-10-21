@@ -121,6 +121,7 @@ func (s *GroupService) ReviewJoinRequest(operatorUID, requestID uint, action str
 		if err := s.groupRepo.ApproveJoinRequest(req, member); err != nil {
 			return core.NewBizError(http.StatusInternalServerError, "approve join request failed")
 		}
+		s.refreshMembershipCache(req.GroupID)
 
 	case "reject":
 		req.Status = model.ChatGroupJoinRequestStatusRejected

@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"go-admin/internal/dao"
@@ -18,13 +20,22 @@ import (
 
 var ErrUserExists = errors.New("user exists")
 
+// AuthOptions 注册风控 / 演示账号配置（container 从 config 注入，避免 service 依赖 config 包）。
+type AuthOptions struct {
+	RegisterInviteCode string // 非空时注册必须带邀请码
+	DemoEnabled        bool   // 是否开放 /user/demo-login
+	DemoUsername       string // 演示账号用户名（默认 demo）
+}
+
 // UserService 请求链路 Service：ctx 一律方法级传入，不持有请求级上下文（Context 反模式修复）。
 type UserService struct {
-	db     dao.UserDB
-	cache  dao.UserCache
-	jwtCfg dao.JWTConfig
-	jwtKey []byte
+	db       dao.UserDB
+	cache    dao.UserCache
+	jwtCfg   dao.JWTConfig
+	jwtKey   []byte
 	presence *PresenceService // 在线状态唯一来源（S2-11）
+	revoker  *TokenRevocationStore
+	authOpts AuthOptions
 	// onUserKicked 踢下线回调（container 注入，避免 Service 循环依赖）：
 	// 用户权限/角色变更时强制断开其 WS 连接，触发 presence 下线。
 	onUserKicked func(userID uint)
@@ -34,16 +45,24 @@ type Claims struct {
 	UserId   uint   `json:"user_id"`
 	Username string `json:"username"`
 	Role     string `json:"role"`
+	// IssuedAtMs 毫秒级签发时间：JWT 标准 iat 只有秒级精度，
+	// 改密后「同一秒内签发的旧 token」会漏吊销；加毫秒字段用于精确失效判断。
+	IssuedAtMs int64 `json:"iat_ms,omitempty"`
 	jwt.RegisteredClaims
 }
 
-func NewUserService(db dao.UserDB, cache dao.UserCache, jwtCfg dao.JWTConfig, jwtKey []byte, presence *PresenceService) *UserService {
+func NewUserService(db dao.UserDB, cache dao.UserCache, jwtCfg dao.JWTConfig, jwtKey []byte, presence *PresenceService, revoker *TokenRevocationStore, authOpts AuthOptions) *UserService {
+	if authOpts.DemoUsername == "" {
+		authOpts.DemoUsername = "demo"
+	}
 	return &UserService{
 		db:       db,
 		cache:    cache,
 		jwtCfg:   jwtCfg,
 		jwtKey:   jwtKey,
 		presence: presence,
+		revoker:  revoker,
+		authOpts: authOpts,
 	}
 }
 
@@ -52,7 +71,10 @@ func (s *UserService) SetOnUserKicked(fn func(userID uint)) {
 	s.onUserKicked = fn
 }
 
-func (s *UserService) Register(ctx context.Context, username string, password string) error {
+func (s *UserService) Register(ctx context.Context, username string, password string, inviteCode string) error {
+	if err := s.verifyInviteCode(inviteCode); err != nil {
+		return err
+	}
 	if err := s.ensureUsernameAvailable(username); err != nil {
 		return err
 	}
@@ -73,6 +95,51 @@ func (s *UserService) Register(ctx context.Context, username string, password st
 
 	s.cacheUserProfile(ctx, &user)
 	return nil
+}
+
+// verifyInviteCode 演示/公网环境注册风控：配置了邀请码就必须带对，否则 403。
+func (s *UserService) verifyInviteCode(inviteCode string) error {
+	expected := strings.TrimSpace(s.authOpts.RegisterInviteCode)
+	if expected == "" {
+		return nil
+	}
+	got := strings.TrimSpace(inviteCode)
+	if subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+		return core.NewBizError(http.StatusForbidden, "邀请码错误或缺失")
+	}
+	return nil
+}
+
+// RegisterInviteRequired 前端注册表单据此决定是否展示邀请码输入框。
+func (s *UserService) RegisterInviteRequired() bool {
+	return strings.TrimSpace(s.authOpts.RegisterInviteCode) != ""
+}
+
+// DemoLoginEnabled 前端登录页据此决定是否展示「体验 Demo」入口。
+func (s *UserService) DemoLoginEnabled() bool {
+	return s.authOpts.DemoEnabled
+}
+
+// DemoLogin 免密登录预置演示账号：仅当 demo.enabled=true 且种子账号存在时可用。
+// 演示账号由 cmd/seed 创建（密码随机/由运维指定，不对外暴露）。
+func (s *UserService) DemoLogin(ctx context.Context) (string, string, error) {
+	if !s.authOpts.DemoEnabled {
+		return "", "", core.NewBizError(http.StatusNotFound, "演示登录未开启")
+	}
+	username := s.authOpts.DemoUsername
+	if username == "" {
+		username = "demo"
+	}
+	user, err := s.db.FindByUsername(username)
+	if err != nil {
+		return "", "", core.NewBizError(http.StatusNotFound, "演示账号未初始化，请先在服务端执行 seed 命令")
+	}
+	token, err := s.issueToken(user)
+	if err != nil {
+		return "", "", err
+	}
+	s.cacheUserProfile(ctx, user)
+	return token, user.Role, nil
 }
 
 func (s *UserService) AddUser(ctx context.Context, actorRole string, username string, password string, role string) error {
@@ -167,7 +234,9 @@ func (s *UserService) GetUserList(ctx context.Context, actorRole string) ([]map[
 	return safeList, nil
 }
 
-func (s *UserService) GetUser(ctx context.Context, id uint) (*model.User, error) {
+// GetUser 返回脱敏后的用户资料（只含 id/username/role/created_at），
+// 不直接回传 GORM 模型（避免 DeletedAt 等内部字段、并统一小写字段风格）。
+func (s *UserService) GetUser(ctx context.Context, id uint) (map[string]interface{}, error) {
 	key := fmt.Sprintf("user:%d", id)
 	if val, err := s.cache.Get(ctx, key); err == nil {
 		if val == cacheNullValue {
@@ -176,7 +245,7 @@ func (s *UserService) GetUser(ctx context.Context, id uint) (*model.User, error)
 
 		var user model.User
 		if err := json.Unmarshal([]byte(val), &user); err == nil {
-			return &user, nil
+			return buildSafeUserProfile(&user), nil
 		}
 	}
 
@@ -190,7 +259,7 @@ func (s *UserService) GetUser(ctx context.Context, id uint) (*model.User, error)
 
 			var user model.User
 			if err := json.Unmarshal([]byte(val), &user); err == nil {
-				return &user, nil
+				return buildSafeUserProfile(&user), nil
 			}
 		}
 	}
@@ -208,7 +277,7 @@ func (s *UserService) GetUser(ctx context.Context, id uint) (*model.User, error)
 		_ = s.cache.Set(ctx, key, string(userJSON), jitterTTL(defaultCacheTTL))
 	}
 
-	return user, nil
+	return buildSafeUserProfile(user), nil
 }
 
 func (s *UserService) UpdateUser(ctx context.Context, id uint, currentUserID uint, currentRole string, username string, role string) error {
@@ -236,11 +305,13 @@ func (s *UserService) UpdateUser(ctx context.Context, id uint, currentUserID uin
 		return core.NewBizError(http.StatusInternalServerError, "update user failed")
 	}
 
-	s.cacheUserProfile(ctx, user)     // 更新用户缓存
+	s.cacheUserProfile(ctx, user) // 更新用户缓存
 	if s.onUserKicked != nil {
 		s.onUserKicked(id) // 强制断开 WS 连接 → presence 下线
 	}
-	s.deleteUserProfileCache(ctx, id) // 删除个人缓存
+	// 角色/用户名已变化，旧 JWT 里的 claims 不再可信：让该用户此前签发的 token 全部失效
+	s.invalidateUserTokens(ctx, id)
+	s.deleteUserProfileCache(ctx, id)                             // 删除个人缓存
 	_ = s.cache.Del(ctx, fmt.Sprintf("user:%d", id), "user:list") // 删除用户列表缓存
 	return nil
 }
@@ -264,7 +335,7 @@ func (s *UserService) ChangePassword(ctx context.Context, id uint, currentUserID
 
 	if currentRole != model.RoleAdmin && currentRole != model.RoleSuperAdmin {
 		if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(oldPassword)); err != nil {
-			return core.NewBizError(http.StatusBadRequest, "old password is incorrect")
+			return core.NewBizError(http.StatusBadRequest, "旧密码不正确")
 		}
 	}
 
@@ -278,8 +349,23 @@ func (s *UserService) ChangePassword(ctx context.Context, id uint, currentUserID
 		return core.NewBizError(http.StatusInternalServerError, "change password failed")
 	}
 
+	// 密码已变更：此前签发的 token 全部失效（含改密者当前会话），强制重新登录
+	s.invalidateUserTokens(ctx, id)
+	if s.onUserKicked != nil {
+		s.onUserKicked(id)
+	}
 	_ = s.cache.Del(ctx, fmt.Sprintf("user:%d", id), "user:list")
 	return nil
+}
+
+// invalidateUserTokens 写入用户级失效时间戳：早于该时间签发的 token 立即 401。
+func (s *UserService) invalidateUserTokens(ctx context.Context, userID uint) {
+	if s.revoker == nil || userID == 0 {
+		return
+	}
+	if err := s.revoker.InvalidateUserBefore(ctx, userID, time.Now()); err != nil {
+		core.Z().Errorf("invalidate user tokens failed user_id=%d: %v", userID, err)
+	}
 }
 
 func (s *UserService) DeleteUser(ctx context.Context, actorRole string, id uint) error {
@@ -302,28 +388,17 @@ func (s *UserService) DeleteUser(ctx context.Context, actorRole string, id uint)
 func (s *UserService) Login(ctx context.Context, username string, password string) (string, string, error) {
 	user, err := s.db.FindByUsername(username)
 	if err != nil {
-		return "", "", core.NewBizError(http.StatusNotFound, "user not found")
+		// 不暴露「用户是否存在」，统一返回同一文案，避免账号枚举
+		return "", "", core.NewBizError(http.StatusBadRequest, "用户名或密码错误")
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)); err != nil {
-		return "", "", core.NewBizError(http.StatusBadRequest, "username or password is incorrect")
+		return "", "", core.NewBizError(http.StatusBadRequest, "用户名或密码错误")
 	}
 
-	expirationTime := time.Now().Add(s.jwtCfg.GetExpireHours())
-	claims := &Claims{
-		UserId:   user.ID,
-		Username: user.Username,
-		Role:     user.Role,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(expirationTime),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-		},
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString(s.getJWTKey())
+	tokenString, err := s.issueToken(user)
 	if err != nil {
-		return "", "", core.NewBizError(http.StatusInternalServerError, "sign token failed")
+		return "", "", err
 	}
 
 	s.cacheUserProfile(ctx, user)
@@ -331,11 +406,44 @@ func (s *UserService) Login(ctx context.Context, username string, password strin
 	return tokenString, user.Role, nil
 }
 
-func (s *UserService) Logout(ctx context.Context, userID uint) error {
+// issueToken 统一签发 JWT（登录 / 演示登录共用）。
+func (s *UserService) issueToken(user *model.User) (string, error) {
+	now := time.Now()
+	expirationTime := now.Add(s.jwtCfg.GetExpireHours())
+	claims := &Claims{
+		UserId:     user.ID,
+		Username:   user.Username,
+		Role:       user.Role,
+		IssuedAtMs: now.UnixMilli(),
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expirationTime),
+			IssuedAt:  jwt.NewNumericDate(now),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString(s.getJWTKey())
+	if err != nil {
+		return "", core.NewBizError(http.StatusInternalServerError, "sign token failed")
+	}
+	return tokenString, nil
+}
+
+func (s *UserService) Logout(ctx context.Context, userID uint, token string, expiresAt time.Time) error {
 	if userID == 0 {
 		return core.NewBizError(http.StatusUnauthorized, "missing user identity")
 	}
-	// 在线状态由 WS 断开时通过 presence 清理；Logout 仅作 JWT 失效语义（前端丢弃 token）。
+	// 服务端主动失效：把当前 token 指纹写入 Redis 黑名单，logout 后同一 token 立即 401。
+	if s.revoker != nil && token != "" {
+		if err := s.revoker.Revoke(ctx, token, userID, expiresAt); err != nil {
+			core.Z().Errorf("revoke token failed user_id=%d: %v", userID, err)
+			return core.NewBizError(http.StatusInternalServerError, "logout failed")
+		}
+	}
+	// 断开 WS 连接并触发 presence 下线清理（前端已经 close，这里是服务端兜底）
+	if s.onUserKicked != nil {
+		s.onUserKicked(userID)
+	}
 	return nil
 }
 

@@ -42,6 +42,8 @@ type GroupRepository interface {
 	UpdateJoinRequest(req *model.ChatGroupJoinRequest) error
 
 	FindUserByID(userID uint) (*model.User, error)
+	// FindUsersByIDs 批量查询用户资料（群成员/群消息补 username，避免逐条 N+1）
+	FindUsersByIDs(userIDs []uint) (map[uint]*model.User, error)
 	TransferOwner(group *model.ChatGroup, oldOwner *model.ChatGroupMember, newOwner *model.ChatGroupMember) error
 
 	AcceptInvitation(invitation *model.ChatGroupInvitation, member *model.ChatGroupMember) error

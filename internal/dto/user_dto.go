@@ -1,8 +1,9 @@
 package dto
 
 type RegisterRequest struct {
-	Username string `json:"username" binding:"required,min=3,max=32,username_format"`
-	Password string `json:"password" binding:"required,min=6,max=72"`
+	Username   string `json:"username" binding:"required,min=3,max=32,username_format"`
+	Password   string `json:"password" binding:"required,min=6,max=72"`
+	InviteCode string `json:"invite_code" binding:"omitempty,max=64"`
 }
 
 type LoginRequest struct {

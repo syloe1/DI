@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"go-admin/internal/dto"
 	"go-admin/internal/service"
@@ -27,17 +28,44 @@ func (h *UserHandler) Register(c *gin.Context) {
 		return
 	}
 
-	err := h.svc.Register(c.Request.Context(), req.Username, req.Password)
+	err := h.svc.Register(c.Request.Context(), req.Username, req.Password, req.InviteCode)
 	if err != nil {
 		if errors.Is(err, service.ErrUserExists) {
-			core.Fail(c, http.StatusBadRequest, "username already exists")
+			core.Fail(c, http.StatusBadRequest, "用户名已存在")
 			return
 		}
+		// 审计：失败注册（邀请码错误等）可追溯，避免批量注册无日志
+		core.Z().Warnw("user register rejected",
+			"username", req.Username, "client_ip", c.ClientIP(), "reason", err.Error())
 		core.FailByError(c, err)
 		return
 	}
 
+	core.Z().Infow("user registered", "username", req.Username, "client_ip", c.ClientIP())
 	core.SuccessWithMessage(c, "register success", nil)
+}
+
+// RegisterConfig 公开配置：前端据此决定是否展示邀请码输入框 / 体验 Demo 入口。
+func (h *UserHandler) RegisterConfig(c *gin.Context) {
+	core.Success(c, gin.H{
+		"invite_required": h.svc.RegisterInviteRequired(),
+		"demo_enabled":    h.svc.DemoLoginEnabled(),
+	})
+}
+
+// DemoLogin 免密登录预置演示账号（demo.enabled=true 时可用）。
+func (h *UserHandler) DemoLogin(c *gin.Context) {
+	token, role, err := h.svc.DemoLogin(c.Request.Context())
+	if err != nil {
+		core.FailByError(c, err)
+		return
+	}
+	core.Z().Infow("demo login", "client_ip", c.ClientIP())
+	core.Success(c, gin.H{
+		"token": token,
+		"role":  role,
+		"demo":  true,
+	})
 }
 
 func (h *UserHandler) Login(c *gin.Context) {
@@ -60,7 +88,14 @@ func (h *UserHandler) Login(c *gin.Context) {
 }
 
 func (h *UserHandler) Logout(c *gin.Context) {
-	if err := h.svc.Logout(c.Request.Context(), c.GetUint("userID")); err != nil {
+	userID := c.GetUint("userID")
+	token := c.GetString("token")
+	expiresAt, _ := c.Get("tokenExpiresAt")
+	var exp time.Time
+	if t, ok := expiresAt.(time.Time); ok {
+		exp = t
+	}
+	if err := h.svc.Logout(c.Request.Context(), userID, token, exp); err != nil {
 		core.FailByError(c, err)
 		return
 	}

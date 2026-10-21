@@ -111,6 +111,28 @@ systemctl enable go-admin          # 开机自启（先不 start，等二进制�
   `127.0.0.1`，只对本机可见，**不要放行**。要远程看就 SSH 端口转发：
   `ssh -L 6060:127.0.0.1:6060 root@<server>`。
 
+### ⑦ 写入演示种子数据（面试演示必做）
+
+首次部署、以及需要重置演示数据时，用同一个二进制构建的 `seed` 命令：
+
+```bash
+# 本地交叉编译（与 go-admin 一起打包）
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o dist/seed ./cmd/seed
+scp dist/seed root@<server>:/opt/go-admin/seed
+
+# 服务器上执行（复用 systemd 环境变量，幂等）
+ssh root@<server> '
+  set -a; . /opt/go-admin/go-admin.env; set +a
+  /opt/go-admin/seed -config /opt/go-admin/config/config.yaml
+'
+```
+
+会写入 demo/alice/bob/carol 四个用户、「DI 产品体验群」+ 12 条群聊、10 条私聊；
+登录页「体验 Demo」按钮即可免注册进入。详细说明见 [README](../README.md#演示数据--体验账号面试演示必做)。
+
+> 评审遗留的 `review_*` 测试账号可以这样清理：
+> `/opt/go-admin/seed -purge-users-prefix review_ -yes`
+
 ## 3. 日常发布
 
 ### 方式 A：本地交叉编译后上传（推荐）

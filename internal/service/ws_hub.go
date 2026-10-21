@@ -312,6 +312,12 @@ func (c *WSClient) handleGroupMessage(groupID uint, content string) {
 		return
 	}
 
+	// 发送者用户名：跟 HTTP 路径一致写进事件，消费端广播后前端可直接展示
+	var username string
+	if user, err := c.Hub.GroupRepo.FindUserByID(c.UserID); err == nil && user != nil {
+		username = user.Username
+	}
+
 	message := &model.ChatGroupMessage{
 		GroupID:   groupID,
 		SenderUID: c.UserID,
@@ -321,6 +327,7 @@ func (c *WSClient) handleGroupMessage(groupID uint, content string) {
 		Type:      "group_message_created",
 		GroupID:   groupID,
 		FromUID:   c.UserID,
+		Username:  username,
 		Content:   content,
 		CreatedAt: time.Now(),
 	}

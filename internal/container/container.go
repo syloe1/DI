@@ -27,6 +27,8 @@ type Container struct {
 
 	UserService *service.UserService
 	UserHandler *handler.UserHandler
+	// TokenRevocation JWT 主动失效（logout/改密后旧 token 立即 401）
+	TokenRevocation *service.TokenRevocationStore
 
 	WSService      *service.WSService
 	WSHandler      *handler.WSHandler
@@ -60,6 +62,8 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 	instanceQueue := fmt.Sprintf("%s.%s", cfg.RabbitMQ.Queue, instanceID)
 	presenceService := service.NewPresenceService(redisClient, instanceID)
 	groupCacheService := service.NewGroupCacheService(redisClient, groupRepo)
+	// JWT 主动失效：Redis 黑名单 + 用户级 invalid_before（ttl 覆盖整个 token 生命周期）
+	tokenRevocation := service.NewTokenRevocationStore(userCache, time.Duration(cfg.GetJwtConfig().ExpireHours)*time.Hour)
 	rabbit, err := core.NewRabbitMQ(cfg.RabbitMQ.URL, cfg.RabbitMQ.Exchange, instanceQueue)
 	if err != nil {
 		core.Z().Fatalf("connect rabbitmq failed: %v", err)
@@ -68,9 +72,13 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 	outboxService := service.NewOutboxService(outboxRepo, groupMessagePublisher, instanceID)
 	outboxService.Start(ctx)
 
-	userService := service.NewUserService(userDB, userCache, jwtCfg, jwtSecret, presenceService)
+	userService := service.NewUserService(userDB, userCache, jwtCfg, jwtSecret, presenceService, tokenRevocation, service.AuthOptions{
+		RegisterInviteCode: cfg.GetAuthConfig().RegisterInviteCode,
+		DemoEnabled:        cfg.GetDemoConfig().Enabled,
+		DemoUsername:       cfg.GetDemoConfig().Username,
+	})
 	userHandler := handler.NewUserHandler(userService)
-	wsService := service.NewWSService(messageRepo, groupRepo, groupMessagePublisher, presenceService, groupCacheService, userCache, ctx, jwtSecret)
+	wsService := service.NewWSService(messageRepo, groupRepo, groupMessagePublisher, presenceService, groupCacheService, userCache, ctx, jwtSecret, tokenRevocation)
 	// 用户角色/权限变更 → 强制断开其 WS（踢下线），presence 随之清理在线状态
 	userService.SetOnUserKicked(func(userID uint) { wsService.KickUser(userID) })
 	wsHandler := handler.NewWSHandler(wsService)
@@ -114,7 +122,7 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 		})
 	})
 	messageHandler := handler.NewMessageHandler(messageService)
-	groupService := service.NewGroupService(groupRepo)
+	groupService := service.NewGroupService(groupRepo, groupCacheService)
 	groupHandler := handler.NewGroupHandler(groupService)
 	return &Container{
 		Config:          cfg,
@@ -124,6 +132,7 @@ func NewContainer(cfg *config.App, db *gorm.DB, redisClient *redis.Client, appLo
 		JWTSecret:       jwtSecret,
 		UserService:     userService,
 		UserHandler:     userHandler,
+		TokenRevocation: tokenRevocation,
 		WSService:       wsService,
 		WSHandler:       wsHandler,
 		MessageService:  messageService,

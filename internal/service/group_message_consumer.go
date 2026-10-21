@@ -164,6 +164,7 @@ func (c *GroupMessageConsumer) handleDelivery(ctx context.Context, d amqp091.Del
 			"id":         event.MessageID,
 			"group_id":   event.GroupID,
 			"user_id":    event.FromUID,
+			"username":   event.Username,
 			"content":    event.Content,
 			"created_at": event.CreatedAt.Format(time.RFC3339),
 		},

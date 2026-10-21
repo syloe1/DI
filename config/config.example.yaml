@@ -38,6 +38,17 @@ jwt:
   secret: "change-me"         # ← 环境变量 APP_JWT_SECRET
   expire_hours: 24
 
+# 注册风控：非空时注册必须带邀请码（APP_AUTH_REGISTER_INVITE_CODE）。
+# 演示/公网环境强烈建议设置；不设置则注册开放（仅靠 IP 限流）。
+auth:
+  register_invite_code: ""
+
+# 演示账号：开启后登录页显示「体验 Demo」按钮（需先执行 cmd/seed 写入种子数据）。
+# 公网正式环境如果不想暴露演示入口，设为 false 或删除前端入口。
+demo:
+  enabled: true               # ← APP_DEMO_ENABLED
+  username: "demo"            # ← APP_DEMO_USERNAME
+
 rabbitmq:
   url: "amqp://guest:guest@127.0.0.1:5672/"  # ← 环境变量 APP_RABBITMQ_URL
   exchange: "chat.events"
