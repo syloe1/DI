@@ -26,6 +26,7 @@
 | 15 | P1 | 评审遗留 `review_*` 测试账号/解散群 | `cmd/seed` 提供 `-purge-users-prefix` / `-purge-dissolved-groups`（需 `-yes` 确认） | ✅ 本机清理验证（线上发布脚本会自动清理并先备份 DB） |
 | 16 | P1 | 群成员列表仍包含被踢/已退群成员 | `GetGroupMembers` 只返回 active 成员；踢人/退群/审批通过后立即刷新群 active 成员缓存（`RefreshActiveMembers`），被踢成员不再收到群消息 | ✅ 扩展 E2E：踢人后成员数 4→2、被踢成员 5s 内无群消息推送 |
 | 17 | P1 | 改密后「同一秒内签发」的旧 token 漏吊销 | JWT 增加毫秒级 `iat_ms` 声明；`invalid_before` 改存毫秒并兼容旧秒级数据；HTTP/WS 均按毫秒判断 | ✅ 扩展 E2E：改密后旧 token 立即 401、新密码可登录 |
+| 18 | P1 | 手机端点进私聊先显示「...」/「还没有消息」空态，3–4s 后才正常 | 会话列表/搜索结果的用户名写入 Pinia 缓存，进聊天立即渲染头部；`messageList` 返回的 `peer_user` 直接复用（少发一次 `/user/{id}`）；点击会话先预取历史（单一请求复用）；加载期显示骨架气泡而不是空态；手机端聊天区按 `100dvh - 顶栏 - tabbar` 占满高度，不再只显示半屏卡片 | ✅ 新增 `chat-entry-check.mjs`：8/8（缓存的用户名、骨架屏、无空态闪烁、单请求、占满高度、400ms RTT 下首屏 240ms） |
 
 ## 安全相关额外修复
 
@@ -58,6 +59,7 @@ npm run preview   # 生产产物 + 代理预览
 # 冒烟（可选，需要本机已启动 Chrome --remote-debugging-port=9223）
 node scripts/verify/ui-smoke.mjs          # 19 项 UI 检查
 node scripts/verify/group-load-check.mjs  # 群详情并行/骨架屏/N+1（400ms RTT 模拟）
+node scripts/verify/chat-entry-check.mjs  # 手机端私聊首屏：缓存用户名/骨架屏/单请求/占满高度
 ```
 
 最近一轮验证结果（2026-10-22）：
@@ -66,7 +68,8 @@ node scripts/verify/group-load-check.mjs  # 群详情并行/骨架屏/N+1（400m
 - 扩展 E2E：**15/15**（私聊实时 + 已读回执 + sync、建群/设管/踢人/转让/解散、
   被踢成员不再收群消息、改密旧 token 401）
 - 快速回归：**11/11**（未鉴权 404、Demo 数据、群消息 username、登出吊销、注册限流）
-- UI 冒烟：**19/19**（dev server 实跑；生产构建此前同样 19/19）
+- UI 冒烟：**19/19**（dev 与生产构建各跑一轮）
+- 手机端私聊首屏：**8/8**（dev 与生产构建各跑一轮；400ms RTT 模拟下 240ms 出消息）
 
 ## 发布到线上（服务器已定位：AliYunECS / di.syloe1.xyz）
 
@@ -96,7 +99,8 @@ ssh AliYunECS 'sudo bash /tmp/di-deploy/remote-deploy.sh'
 nginx -t 后 reload → 跑完整验收（readyz / register-config / 未鉴权 404 / Demo 登录 /
 登出后旧 token 401），失败自动回滚。
 
-当前部署包 SHA256：`030AAE01F0D321009C24920E9BE742D43B362762967A124975AA94EA2BC31DB1`
+当前部署包 SHA256：`BF464A9D664DE447EA9F41FFCABBDA50200565984B26CB66646144271D01C87C`
+（2026-10-22 18:39 更新：前端包含移动端私聊首屏体验修复，后端二进制不变）
 
 也可以不用脚本，手动发布步骤：
 
