@@ -32,10 +32,16 @@ r.md
 
 # Secrets：本地真实配置不入库（用 config.example.yaml 作为模板）
 /configs/config.yaml
+/config/config.yaml
+
+# AI 工具个人配置（可能含 API Token / 鉴权信息），只留本地
+/.claude/
+/.agents/
 
 # Docker Compose 环境变量（真实密码放 .env，模板见 .env.example）
 .env
 .env.local
+.env.*
 
 # Local built binaries (no extension leftovers)
 /di-server
