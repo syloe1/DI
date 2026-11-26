@@ -6,8 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"go-admin/pkg/core"
+	"di/internal/telemetry"
 
+	"di/internal/transport"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v4"
 )
@@ -51,7 +52,7 @@ func JWTAuth(secret []byte, revoker TokenRevoker) gin.HandlerFunc {
 
 		// 2. 判断请求头是否为空或格式不正确（必须以 Bearer 开头）
 		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-			core.Fail(c, http.StatusUnauthorized, "未登录")
+			transport.Fail(c, http.StatusUnauthorized, "未登录")
 			c.Abort() // 中断请求
 			return
 		}
@@ -74,7 +75,7 @@ func JWTAuth(secret []byte, revoker TokenRevoker) gin.HandlerFunc {
 
 		// 6. 解析出错或Token无效
 		if err != nil || !token.Valid {
-			core.Fail(c, http.StatusUnauthorized, "token无效")
+			transport.Fail(c, http.StatusUnauthorized, "token无效")
 			c.Abort()
 			return
 		}
@@ -84,9 +85,9 @@ func JWTAuth(secret []byte, revoker TokenRevoker) gin.HandlerFunc {
 			revoked, checkErr := revoker.IsRevoked(c.Request.Context(), tokenString, claims.UserId, claims.issuedAt())
 			if checkErr != nil {
 				// Redis 抖动时 fail-open（可用性优先），仅记录告警；正常路径不会走到这里。
-				core.Z().Warnf("check token revocation failed: %v", checkErr)
+				telemetry.Z().Warnf("check token revocation failed: %v", checkErr)
 			} else if revoked {
-				core.Fail(c, http.StatusUnauthorized, "登录状态已失效，请重新登录")
+				transport.Fail(c, http.StatusUnauthorized, "登录状态已失效，请重新登录")
 				c.Abort()
 				return
 			}

@@ -1,8 +1,10 @@
-package core
+package transport
 
 import (
 	"errors"
 	"net/http"
+
+	"di/internal/telemetry"
 
 	"github.com/gin-gonic/gin"
 )
@@ -73,6 +75,6 @@ func FailByError(c *gin.Context, err error) {
 		return
 	}
 	// 内部错误：细节只进日志，响应不泄漏（避免暴露 SQL/文件路径等内部信息）
-	Z().Errorf("internal error: %v", err)
+	telemetry.Z().Errorf("internal error: %v", err)
 	Respond(c, http.StatusInternalServerError, "internal error", nil)
 }

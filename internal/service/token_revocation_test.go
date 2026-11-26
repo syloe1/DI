@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"go-admin/internal/dao"
+	"di/internal/dao"
 
 	"github.com/go-redis/redis/v8"
 )

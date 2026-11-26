@@ -7,9 +7,10 @@ import (
 	"strconv"
 	"time"
 
-	"go-admin/internal/dao"
-	"go-admin/internal/domain/model"
-	"go-admin/pkg/core"
+	"di/internal/dao"
+	"di/internal/domain/model"
+	"di/internal/telemetry"
+	"di/internal/transport"
 )
 
 const messageDuplicateSubmitTTL = 3 * time.Second
@@ -80,29 +81,42 @@ func NewMessageService(messageRepo dao.MessageRepository, cache dao.UserCache, o
 	}
 }
 
-func (s *MessageService) GetConversations(ctx context.Context, userID uint) ([]ConversationItem, error) {
-	conversations, err := s.messageRepo.GetConversations(userID)
+func (s *MessageService) GetConversations(ctx context.Context, userID uint, cursor uint, limit int) ([]ConversationItem, uint, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	// 多取一条判断是否还有下一页（游标分页）
+	conversations, err := s.messageRepo.GetConversations(ctx, userID, cursor, limit+1)
 	if err != nil {
-		return nil, core.NewBizError(http.StatusInternalServerError, "get conversations failed")
+		return nil, 0, transport.NewBizError(http.StatusInternalServerError, "get conversations failed")
+	}
+
+	nextCursor := uint(0)
+	if len(conversations) > limit {
+		nextCursor = conversations[limit-1].LastID
+		conversations = conversations[:limit]
 	}
 	if len(conversations) == 0 {
-		return []ConversationItem{}, nil
+		return []ConversationItem{}, 0, nil
 	}
 
 	// N+1 修复：先收集全部 peerID，用两条批量查询替代循环内的 FindUserByID / CountUnreadMessages
-	// 原实现：50 个会话 = 100 次查询；现实现：固定 3 次（会话 + 用户批量 + 未读批量）
 	peerIDs := make([]uint, 0, len(conversations))
 	for _, conv := range conversations {
 		peerIDs = append(peerIDs, conv.PeerUID)
 	}
 
-	users, err := s.messageRepo.FindUsersByIDs(peerIDs)
+	users, err := s.messageRepo.FindUsersByIDs(ctx, peerIDs)
 	if err != nil {
-		return nil, core.NewBizError(http.StatusInternalServerError, "load peer users failed")
+		return nil, 0, transport.NewBizError(http.StatusInternalServerError, "load peer users failed")
 	}
-	unreadMap, err := s.messageRepo.CountUnreadByPeers(userID, peerIDs)
+	unreadMap, err := s.messageRepo.CountUnreadByPeers(ctx, userID, peerIDs)
 	if err != nil {
-		return nil, core.NewBizError(http.StatusInternalServerError, "load unread counts failed")
+		return nil, 0, transport.NewBizError(http.StatusInternalServerError, "load unread counts failed")
 	}
 
 	result := make([]ConversationItem, 0, len(conversations))
@@ -121,33 +135,33 @@ func (s *MessageService) GetConversations(ctx context.Context, userID uint) ([]C
 		})
 	}
 
-	return result, nil
+	return result, nextCursor, nil
 }
 
 func (s *MessageService) GetMessageList(ctx context.Context, userID uint, peerID uint, page int, pageSize int) (*MessageListResult, error) {
 	page, pageSize = normalizePagination(page, pageSize, 1, 20)
 	offset := (page - 1) * pageSize
 
-	peerUser, err := s.messageRepo.FindUserByID(peerID)
+	peerUser, err := s.messageRepo.FindUserByID(ctx, peerID)
 	if err != nil {
-		return nil, core.NewBizError(http.StatusNotFound, "peer user not found")
+		return nil, transport.NewBizError(http.StatusNotFound, "peer user not found")
 	}
 
-	messages, err := s.messageRepo.GetMessages(userID, peerID, offset, pageSize)
+	messages, err := s.messageRepo.GetMessages(ctx, userID, peerID, offset, pageSize)
 	if err != nil {
-		return nil, core.NewBizError(http.StatusInternalServerError, "get messages failed")
+		return nil, transport.NewBizError(http.StatusInternalServerError, "get messages failed")
 	}
 
 	// 标记已读 + 已读回执：先查出本次从未读→已读的消息 ID，再通知对方
-	unreadIDs, err := s.messageRepo.FindUnreadMessageIDs(userID, peerID)
+	unreadIDs, err := s.messageRepo.FindUnreadMessageIDs(ctx, userID, peerID)
 	if err != nil {
-		return nil, core.NewBizError(http.StatusInternalServerError, "query unread messages failed")
+		return nil, transport.NewBizError(http.StatusInternalServerError, "query unread messages failed")
 	}
 	if len(unreadIDs) > 0 {
-		if err := s.messageRepo.MarkMessagesAsRead(userID, peerID); err != nil {
-			fmt.Printf("mark messages as read failed: %v\n", err)
-		}
-		if s.onMessagesRead != nil {
+		if err := s.messageRepo.MarkMessagesAsRead(ctx, userID, peerID); err != nil {
+			// 已读持久化失败：不发已读成功回执（避免对方误以为已读），记录结构化告警
+			telemetry.Z().Errorf("mark messages as read failed user_id=%d peer_id=%d: %v", userID, peerID, err)
+		} else if s.onMessagesRead != nil {
 			s.onMessagesRead(peerID, userID, unreadIDs)
 		}
 	}
@@ -185,9 +199,9 @@ func (s *MessageService) SyncMessages(ctx context.Context, userID uint, afterID 
 	}
 
 	// 多取一条判断是否还有更多，避免额外 COUNT 查询
-	messages, err := s.messageRepo.SyncMessages(userID, afterID, limit+1)
+	messages, err := s.messageRepo.SyncMessages(ctx, userID, afterID, limit+1)
 	if err != nil {
-		return nil, core.NewBizError(http.StatusInternalServerError, "sync messages failed")
+		return nil, transport.NewBizError(http.StatusInternalServerError, "sync messages failed")
 	}
 	hasMore := len(messages) > limit
 	if hasMore {
@@ -218,21 +232,21 @@ func (s *MessageService) SyncMessages(ctx context.Context, userID uint, afterID 
 }
 
 func (s *MessageService) SendMessage(ctx context.Context, userID uint, toUID uint, content string) (*SendMessageResult, error) {
-	toUser, err := s.messageRepo.FindUserByID(toUID)
+	toUser, err := s.messageRepo.FindUserByID(ctx, toUID)
 	if err != nil {
-		return nil, core.NewBizError(http.StatusNotFound, "target user not found")
+		return nil, transport.NewBizError(http.StatusNotFound, "target user not found")
 	}
 
 	if userID == toUID {
-		return nil, core.NewBizError(http.StatusBadRequest, "cannot send message to yourself")
+		return nil, transport.NewBizError(http.StatusBadRequest, "cannot send message to yourself")
 	}
 
 	duplicate, err := s.checkDuplicateSubmit(ctx, userID, toUID, content)
 	if err != nil {
-		return nil, core.NewBizError(http.StatusInternalServerError, "duplicate submit check failed")
+		return nil, transport.NewBizError(http.StatusInternalServerError, "duplicate submit check failed")
 	}
 	if duplicate {
-		return nil, core.NewBizError(http.StatusTooManyRequests, "duplicate message submission")
+		return nil, transport.NewBizError(http.StatusTooManyRequests, "duplicate message submission")
 	}
 
 	message := &model.Message{
@@ -242,8 +256,8 @@ func (s *MessageService) SendMessage(ctx context.Context, userID uint, toUID uin
 		IsRead:  false,
 	}
 
-	if err := s.messageRepo.CreateMessage(message); err != nil {
-		return nil, core.NewBizError(http.StatusInternalServerError, "send message failed")
+	if err := s.messageRepo.CreateMessage(ctx, message); err != nil {
+		return nil, transport.NewBizError(http.StatusInternalServerError, "send message failed")
 	}
 
 	// 实时推送：收件人在线则立即收到 WS message 事件（写通道有缓冲 + 慢客户端丢弃，不阻塞请求）。
@@ -267,20 +281,20 @@ func (s *MessageService) SendMessage(ctx context.Context, userID uint, toUID uin
 func (s *MessageService) DeleteMessage(ctx context.Context, userID uint, messageIDStr string) error {
 	messageID, err := strconv.ParseUint(messageIDStr, 10, 32)
 	if err != nil {
-		return core.NewBizError(http.StatusBadRequest, "invalid message id")
+		return transport.NewBizError(http.StatusBadRequest, "invalid message id")
 	}
 
-	message, err := s.messageRepo.FindMessageByID(uint(messageID))
+	message, err := s.messageRepo.FindMessageByID(ctx, uint(messageID))
 	if err != nil {
-		return core.NewBizError(http.StatusNotFound, "message not found")
+		return transport.NewBizError(http.StatusNotFound, "message not found")
 	}
 
 	if message.FromUID != userID {
-		return core.NewBizError(http.StatusForbidden, "can only delete your own messages")
+		return transport.NewBizError(http.StatusForbidden, "can only delete your own messages")
 	}
 
-	if err := s.messageRepo.DeleteMessage(message); err != nil {
-		return core.NewBizError(http.StatusInternalServerError, "delete message failed")
+	if err := s.messageRepo.DeleteMessage(ctx, message); err != nil {
+		return transport.NewBizError(http.StatusInternalServerError, "delete message failed")
 	}
 
 	return nil

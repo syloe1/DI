@@ -7,9 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"go-admin/internal/domain/model"
-	"go-admin/pkg/core"
-
+	"di/internal/domain/model"
+	"di/internal/telemetry"
 	"gorm.io/gorm"
 )
 
@@ -31,20 +30,20 @@ type failedCall struct {
 	lastError   string
 }
 
-func (f *fakeOutboxRepo) ClaimDue(limit int, now time.Time, claimer string, staleAfter time.Duration) ([]model.MessageOutbox, error) {
+func (f *fakeOutboxRepo) ClaimDue(ctx context.Context, limit int, now time.Time, claimer string, staleAfter time.Duration) ([]model.MessageOutbox, error) {
 	return f.claimResult, f.claimErr
 }
 
-func (f *fakeOutboxRepo) CountByStatus(status string) (int64, error) {
+func (f *fakeOutboxRepo) CountByStatus(ctx context.Context, status string) (int64, error) {
 	return f.counts[status], nil
 }
 
-func (f *fakeOutboxRepo) MarkPublished(id uint, now time.Time) error {
+func (f *fakeOutboxRepo) MarkPublished(ctx context.Context, id uint, now time.Time) error {
 	f.publishedIDs = append(f.publishedIDs, id)
 	return nil
 }
 
-func (f *fakeOutboxRepo) MarkFailed(id uint, retryCount int, nextRetryAt time.Time, lastError string) error {
+func (f *fakeOutboxRepo) MarkFailed(ctx context.Context, id uint, retryCount int, nextRetryAt time.Time, lastError string) error {
 	f.failedCalls = append(f.failedCalls, failedCall{id: id, retryCount: retryCount, nextRetryAt: nextRetryAt, lastError: lastError})
 	return nil
 }
@@ -114,9 +113,9 @@ func TestOutboxPublishDue_PublishFailed_MarksRetry(t *testing.T) {
 	pub.failPayloads[`{"event":"fail"}`] = true
 	svc := newOutboxForTest(repo, pub)
 
-	before := core.Metrics.OutboxPublishFailed.Load()
+	before := telemetry.Metrics.OutboxPublishFailed.Load()
 	svc.publishDue(context.Background())
-	after := core.Metrics.OutboxPublishFailed.Load()
+	after := telemetry.Metrics.OutboxPublishFailed.Load()
 
 	if len(repo.publishedIDs) != 0 {
 		t.Errorf("MarkPublished called %v, want none", repo.publishedIDs)

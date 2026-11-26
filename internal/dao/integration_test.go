@@ -7,9 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"go-admin/internal/domain/model"
-	"go-admin/pkg/core"
-
+	"di/internal/domain/model"
+	"di/internal/infra"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -43,7 +42,7 @@ func TestMain(m *testing.M) {
 		panic("drop schema_migrations failed: " + err.Error())
 	}
 	// 走生产同款迁移路径（golang-migrate SQL），顺带验证迁移本身可用
-	if err := core.RunMigrations(db); err != nil {
+	if err := infra.RunMigrations(db); err != nil {
 		panic("run migrations failed: " + err.Error())
 	}
 	testDB = db
@@ -64,11 +63,11 @@ func cleanup(t *testing.T, tables ...string) {
 // newMessage 构造一条消息，CreatedAt 由外部指定以便断言排序。
 func newMessage(from, to uint, content string, createdAt time.Time) *model.Message {
 	return &model.Message{
-		Model:     gorm.Model{CreatedAt: createdAt},
-		FromUID:   from,
-		ToUID:     to,
-		Content:   content,
-		IsRead:    false,
+		Model:   gorm.Model{CreatedAt: createdAt},
+		FromUID: from,
+		ToUID:   to,
+		Content: content,
+		IsRead:  false,
 	}
 }
 

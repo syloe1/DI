@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"strings"
 
-	"go-admin/internal/service"
-	"go-admin/pkg/core"
-
+	"di/internal/service"
+	"di/internal/telemetry"
+	"di/internal/transport"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -73,10 +73,11 @@ func NewWSHandler(svc *service.WSService) *WSHandler {
 	}
 }
 
-// extractWSToken 从 WebSocket 握手请求中提取 JWT（P0-3 修复）：
+// extractWSToken 从 WebSocket 握手请求中提取 JWT：
 //  1. 优先 Sec-WebSocket-Protocol 子协议（推荐：不污染 URL，不进访问日志/浏览器历史）
 //  2. 兼容 Authorization: Bearer 头
-//  3. 兜底 URL query ?token=（仅兼容旧客户端，不建议）
+//
+// 不再支持 URL query 传 token（会泄漏到访问日志与浏览器历史）。
 func extractWSToken(r *http.Request) string {
 	if proto := r.Header.Get("Sec-WebSocket-Protocol"); proto != "" {
 		// 浏览器可能发送多个子协议（逗号分隔），约定 token 放首位
@@ -88,14 +89,14 @@ func extractWSToken(r *http.Request) string {
 	if auth := r.Header.Get("Authorization"); auth != "" {
 		return strings.TrimPrefix(strings.TrimSpace(auth), "Bearer ")
 	}
-	return r.URL.Query().Get("token")
+	return ""
 }
 
 func (h *WSHandler) HandleWebSocket(c *gin.Context) {
 	token := extractWSToken(c.Request)
 	userID, err := h.svc.AuthenticateToken(token)
 	if err != nil {
-		core.FailByError(c, err)
+		transport.FailByError(c, err)
 		return
 	}
 
@@ -107,7 +108,7 @@ func (h *WSHandler) HandleWebSocket(c *gin.Context) {
 
 	conn, err := h.upgrader.Upgrade(c.Writer, c.Request, respHeader)
 	if err != nil {
-		core.Z().Errorf("websocket upgrade failed: %v", err)
+		telemetry.Z().Errorf("websocket upgrade failed: %v", err)
 		return
 	}
 

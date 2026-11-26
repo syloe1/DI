@@ -2,10 +2,11 @@ package service
 
 import (
 	"context"
-	"go-admin/internal/dao"
-	"go-admin/internal/domain/model"
-	"go-admin/internal/dto"
-	"go-admin/pkg/core"
+	"di/internal/dao"
+	"di/internal/domain/model"
+	"di/internal/dto"
+	"di/internal/telemetry"
+	"di/internal/transport"
 	"net/http"
 	"strings"
 	"time"
@@ -73,23 +74,23 @@ func NewGroupService(groupRepo dao.GroupRepository, groupCache *GroupCacheServic
 
 // refreshMembershipCache 成员状态变化后刷新「群 active 成员」缓存。
 // 否则被踢/退群用户在缓存 TTL（10 分钟）内仍可能收到群消息推送。
-func (s *GroupService) refreshMembershipCache(groupID uint) {
+func (s *GroupService) refreshMembershipCache(ctx context.Context, groupID uint) {
 	if s == nil || s.groupCache == nil || groupID == 0 {
 		return
 	}
 	if err := s.groupCache.RefreshActiveMembers(context.Background(), groupID); err != nil {
-		core.Z().Warnf("refresh group member cache failed group_id=%d: %v", groupID, err)
+		telemetry.Z().Warnf("refresh group member cache failed group_id=%d: %v", groupID, err)
 	}
 }
 
-func (s *GroupService) CreateGroup(ownerUID uint, req dto.CreateGroupRequest) (*model.ChatGroup, error) {
+func (s *GroupService) CreateGroup(ctx context.Context, ownerUID uint, req dto.CreateGroupRequest) (*model.ChatGroup, error) {
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
-		return nil, core.NewBizError(http.StatusBadRequest, "group name is required")
+		return nil, transport.NewBizError(http.StatusBadRequest, "group name is required")
 	}
 
 	if len(req.MemberIDs) == 0 {
-		return nil, core.NewBizError(http.StatusBadRequest, "group must have at least one member")
+		return nil, transport.NewBizError(http.StatusBadRequest, "group must have at least one member")
 	}
 
 	memberIDs := make([]uint, 0, len(req.MemberIDs))
@@ -97,28 +98,35 @@ func (s *GroupService) CreateGroup(ownerUID uint, req dto.CreateGroupRequest) (*
 
 	for _, memberID := range req.MemberIDs {
 		if memberID == 0 {
-			return nil, core.NewBizError(http.StatusBadRequest, "invalid member id")
+			return nil, transport.NewBizError(http.StatusBadRequest, "invalid member id")
 		}
 
 		if memberID == ownerUID {
-			return nil, core.NewBizError(http.StatusBadRequest, "member_ids cannot contain owner")
+			return nil, transport.NewBizError(http.StatusBadRequest, "member_ids cannot contain owner")
 		}
 
 		if _, ok := seen[memberID]; ok {
-			return nil, core.NewBizError(http.StatusBadRequest, "duplicate member id")
+			return nil, transport.NewBizError(http.StatusBadRequest, "duplicate member id")
 		}
 
 		seen[memberID] = struct{}{}
 		memberIDs = append(memberIDs, memberID)
 	}
 
-	if _, err := s.groupRepo.FindUserByID(ownerUID); err != nil {
-		return nil, core.NewBizError(http.StatusNotFound, "owner user not found")
+	// 一次性批量校验 owner + 所有成员是否存在（替代逐个 FindUserByID 的 N+1）
+	allIDs := make([]uint, 0, len(memberIDs)+1)
+	allIDs = append(allIDs, ownerUID)
+	allIDs = append(allIDs, memberIDs...)
+	userMap, err := s.groupRepo.FindUsersByIDs(ctx, allIDs)
+	if err != nil {
+		return nil, transport.NewBizError(http.StatusInternalServerError, "query users failed")
 	}
-
+	if _, ok := userMap[ownerUID]; !ok {
+		return nil, transport.NewBizError(http.StatusNotFound, "owner user not found")
+	}
 	for _, memberID := range memberIDs {
-		if _, err := s.groupRepo.FindUserByID(memberID); err != nil {
-			return nil, core.NewBizError(http.StatusNotFound, "member user not found")
+		if _, ok := userMap[memberID]; !ok {
+			return nil, transport.NewBizError(http.StatusNotFound, "member user not found")
 		}
 	}
 
@@ -147,8 +155,8 @@ func (s *GroupService) CreateGroup(ownerUID uint, req dto.CreateGroupRequest) (*
 		})
 	}
 
-	if err := s.groupRepo.CreateGroup(group, members); err != nil {
-		return nil, core.NewBizError(http.StatusInternalServerError, "create group failed")
+	if err := s.groupRepo.CreateGroup(ctx, group, members); err != nil {
+		return nil, transport.NewBizError(http.StatusInternalServerError, "create group failed")
 	}
 
 	return group, nil
@@ -157,50 +165,50 @@ func (s *GroupService) CreateGroup(ownerUID uint, req dto.CreateGroupRequest) (*
 // -------------------------- 公共复用方法（群组域各子模块共用） --------------------------
 
 // getNormalGroup 校验群组存在且状态 normal；已解散返回 410（Gone），便于前端区分展示。
-func (s *GroupService) getNormalGroup(groupID uint) (*model.ChatGroup, error) {
-	group, err := s.groupRepo.FindGroupByID(groupID)
+func (s *GroupService) getNormalGroup(ctx context.Context, groupID uint) (*model.ChatGroup, error) {
+	group, err := s.groupRepo.FindGroupByID(ctx, groupID)
 	if err != nil {
-		return nil, core.NewBizError(http.StatusNotFound, "group not found")
+		return nil, transport.NewBizError(http.StatusNotFound, "group not found")
 	}
 
 	if group.Status != model.ChatGroupStatusNormal {
-		return nil, core.NewBizError(http.StatusGone, "group is dissolved")
+		return nil, transport.NewBizError(http.StatusGone, "group is dissolved")
 	}
 
 	return group, nil
 }
 
 // getActiveMember 校验用户是正常（active）群成员。
-func (s *GroupService) getActiveMember(groupID, userID uint, notFoundMsg string) (*model.ChatGroupMember, error) {
-	member, err := s.groupRepo.FindMember(groupID, userID)
+func (s *GroupService) getActiveMember(ctx context.Context, groupID, userID uint, notFoundMsg string) (*model.ChatGroupMember, error) {
+	member, err := s.groupRepo.FindMember(ctx, groupID, userID)
 	if err != nil {
-		return nil, core.NewBizError(http.StatusNotFound, notFoundMsg)
+		return nil, transport.NewBizError(http.StatusNotFound, notFoundMsg)
 	}
 
 	if member.Status != model.ChatGroupMemberStatusActive {
-		return nil, core.NewBizError(http.StatusBadRequest, notFoundMsg)
+		return nil, transport.NewBizError(http.StatusBadRequest, notFoundMsg)
 	}
 
 	return member, nil
 }
 
 // requireOwner 校验操作者是群主。
-func (s *GroupService) requireOwner(groupID, userID uint) (*model.ChatGroupMember, error) {
-	member, err := s.getActiveMember(groupID, userID, "not a group member")
+func (s *GroupService) requireOwner(ctx context.Context, groupID, userID uint) (*model.ChatGroupMember, error) {
+	member, err := s.getActiveMember(ctx, groupID, userID, "not a group member")
 	if err != nil {
 		return nil, err
 	}
 
 	if member.Role != model.ChatGroupMemberRoleOwner {
-		return nil, core.NewBizError(http.StatusForbidden, "only group owner can operate")
+		return nil, transport.NewBizError(http.StatusForbidden, "only group owner can operate")
 	}
 
 	return member, nil
 }
 
 // requireActiveOperator 校验操作者是正常成员（不限定角色）。
-func (s *GroupService) requireActiveOperator(groupID, userID uint) (*model.ChatGroupMember, error) {
-	member, err := s.getActiveMember(groupID, userID, "not a group member")
+func (s *GroupService) requireActiveOperator(ctx context.Context, groupID, userID uint) (*model.ChatGroupMember, error) {
+	member, err := s.getActiveMember(ctx, groupID, userID, "not a group member")
 	if err != nil {
 		return nil, err
 	}
@@ -210,18 +218,18 @@ func (s *GroupService) requireActiveOperator(groupID, userID uint) (*model.ChatG
 
 // -------------------------- 查询 --------------------------
 
-func (s *GroupService) GetGroupDetail(userID, groupID uint) (*GroupDetail, error) {
-	group, err := s.groupRepo.FindGroupByID(groupID)
+func (s *GroupService) GetGroupDetail(ctx context.Context, userID, groupID uint) (*GroupDetail, error) {
+	group, err := s.groupRepo.FindGroupByID(ctx, groupID)
 	if err != nil {
-		return nil, core.NewBizError(http.StatusNotFound, "group not found")
+		return nil, transport.NewBizError(http.StatusNotFound, "group not found")
 	}
 
 	// 已解散/归档的群不再提供详情（404 语义之外用 410 明确告知「已不存在」）
 	if group.Status != model.ChatGroupStatusNormal {
-		return nil, core.NewBizError(http.StatusGone, "group is dissolved")
+		return nil, transport.NewBizError(http.StatusGone, "group is dissolved")
 	}
 
-	member, err := s.getActiveMember(groupID, userID, "not a group member")
+	member, err := s.getActiveMember(ctx, groupID, userID, "not a group member")
 	if err != nil {
 		return nil, err
 	}
@@ -236,15 +244,15 @@ func (s *GroupService) GetGroupDetail(userID, groupID uint) (*GroupDetail, error
 	}, nil
 }
 
-func (s *GroupService) GetGroupMembers(userID, groupID uint) ([]GroupMemberItem, error) {
-	if _, err := s.getActiveMember(groupID, userID, "not a group member"); err != nil {
+func (s *GroupService) GetGroupMembers(ctx context.Context, userID, groupID uint) ([]GroupMemberItem, error) {
+	if _, err := s.getActiveMember(ctx, groupID, userID, "not a group member"); err != nil {
 		return nil, err
 	}
 
 	// 只返回 active 成员：被踢/主动退群/已离开的成员不应出现在「群成员」面板里
-	members, err := s.groupRepo.ListActiveMembers(groupID)
+	members, err := s.groupRepo.ListActiveMembers(ctx, groupID)
 	if err != nil {
-		return nil, core.NewBizError(http.StatusInternalServerError, "get group members failed")
+		return nil, transport.NewBizError(http.StatusInternalServerError, "get group members failed")
 	}
 
 	// 批量补 username（一次 IN 查询，替代前端逐成员 /user/{id} 的 N+1）
@@ -257,9 +265,10 @@ func (s *GroupService) GetGroupMembers(userID, groupID uint) ([]GroupMemberItem,
 		seen[member.UserID] = struct{}{}
 		userIDs = append(userIDs, member.UserID)
 	}
-	userMap, err := s.groupRepo.FindUsersByIDs(userIDs)
+	userMap, err := s.groupRepo.FindUsersByIDs(ctx, userIDs)
 	if err != nil {
-		// 补名字失败不影响成员列表主流程，前端还有「用户{id}」兜底
+		// 补名字失败不影响成员列表主流程，前端还有「用户{id}」兜底；记录告警便于定位
+		telemetry.Z().Warnf("load member usernames failed group_id=%d: %v", groupID, err)
 		userMap = map[uint]*model.User{}
 	}
 
@@ -282,10 +291,10 @@ func (s *GroupService) GetGroupMembers(userID, groupID uint) ([]GroupMemberItem,
 	return result, nil
 }
 
-func (s *GroupService) GetMyGroups(userID uint) ([]MyGroupItem, error) {
-	groups, err := s.groupRepo.ListGroupsByUserID(userID)
+func (s *GroupService) GetMyGroups(ctx context.Context, userID uint) ([]MyGroupItem, error) {
+	groups, err := s.groupRepo.ListGroupsByUserID(ctx, userID)
 	if err != nil {
-		return nil, core.NewBizError(http.StatusInternalServerError, "get my groups failed")
+		return nil, transport.NewBizError(http.StatusInternalServerError, "get my groups failed")
 	}
 
 	result := make([]MyGroupItem, 0, len(groups))

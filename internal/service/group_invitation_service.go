@@ -1,8 +1,10 @@
 package service
 
 import (
-	"go-admin/internal/domain/model"
-	"go-admin/pkg/core"
+	"context"
+	"di/internal/domain/model"
+	"di/internal/telemetry"
+	"di/internal/transport"
 	"net/http"
 	"time"
 )
@@ -18,28 +20,28 @@ invitee 必须存在
 重复 pending 邀请，返回已有邀请
 邀请有效期 7 天
 */
-func (s *GroupService) InviteMember(inviterUID, groupID, inviteeUID uint) (*model.ChatGroupInvitation, error) {
+func (s *GroupService) InviteMember(ctx context.Context, inviterUID, groupID, inviteeUID uint) (*model.ChatGroupInvitation, error) {
 	if inviterUID == inviteeUID {
-		return nil, core.NewBizError(http.StatusBadRequest, "cannot invite yourself")
+		return nil, transport.NewBizError(http.StatusBadRequest, "cannot invite yourself")
 	}
 
-	if _, err := s.getNormalGroup(groupID); err != nil {
+	if _, err := s.getNormalGroup(ctx, groupID); err != nil {
 		return nil, err
 	}
 
-	if _, err := s.getActiveMember(groupID, inviterUID, "not a group member"); err != nil {
+	if _, err := s.getActiveMember(ctx, groupID, inviterUID, "not a group member"); err != nil {
 		return nil, err
 	}
 
-	if _, err := s.groupRepo.FindUserByID(inviteeUID); err != nil {
-		return nil, core.NewBizError(http.StatusNotFound, "invitee user not found")
+	if _, err := s.groupRepo.FindUserByID(ctx, inviteeUID); err != nil {
+		return nil, transport.NewBizError(http.StatusNotFound, "invitee user not found")
 	}
 
-	if member, err := s.groupRepo.FindMember(groupID, inviteeUID); err == nil && member.Status == model.ChatGroupMemberStatusActive {
-		return nil, core.NewBizError(http.StatusBadRequest, "invitee already in group")
+	if member, err := s.groupRepo.FindMember(ctx, groupID, inviteeUID); err == nil && member.Status == model.ChatGroupMemberStatusActive {
+		return nil, transport.NewBizError(http.StatusBadRequest, "invitee already in group")
 	}
 
-	if invitation, err := s.groupRepo.FindPendingInvitation(groupID, inviteeUID); err == nil {
+	if invitation, err := s.groupRepo.FindPendingInvitation(ctx, groupID, inviteeUID); err == nil {
 		return invitation, nil
 	}
 
@@ -51,8 +53,8 @@ func (s *GroupService) InviteMember(inviterUID, groupID, inviteeUID uint) (*mode
 		ExpiredAt:  time.Now().Add(7 * 24 * time.Hour),
 	}
 
-	if err := s.groupRepo.CreateInvitation(invitation); err != nil {
-		return nil, core.NewBizError(http.StatusInternalServerError, "create invitation failed")
+	if err := s.groupRepo.CreateInvitation(ctx, invitation); err != nil {
+		return nil, transport.NewBizError(http.StatusInternalServerError, "create invitation failed")
 	}
 
 	return invitation, nil
@@ -66,21 +68,21 @@ accept：邀请状态 accepted，并加入/恢复成员
 reject：邀请状态 rejected
 handled_at = now
 */
-func (s *GroupService) ReviewInvitation(inviteeUID, invitationID uint, action string) error {
-	invitation, err := s.groupRepo.FindInvitationByID(invitationID)
+func (s *GroupService) ReviewInvitation(ctx context.Context, inviteeUID, invitationID uint, action string) error {
+	invitation, err := s.groupRepo.FindInvitationByID(ctx, invitationID)
 	if err != nil {
-		return core.NewBizError(http.StatusNotFound, "invitation not found")
+		return transport.NewBizError(http.StatusNotFound, "invitation not found")
 	}
 
 	if invitation.InviteeUID != inviteeUID {
-		return core.NewBizError(http.StatusForbidden, "can only review your own invitation")
+		return transport.NewBizError(http.StatusForbidden, "can only review your own invitation")
 	}
 
 	if invitation.Status != model.ChatGroupInvitationStatusPending {
-		return core.NewBizError(http.StatusBadRequest, "invitation is not pending")
+		return transport.NewBizError(http.StatusBadRequest, "invitation is not pending")
 	}
 
-	if _, err := s.getNormalGroup(invitation.GroupID); err != nil {
+	if _, err := s.getNormalGroup(ctx, invitation.GroupID); err != nil {
 		return err
 	}
 
@@ -88,8 +90,10 @@ func (s *GroupService) ReviewInvitation(inviteeUID, invitationID uint, action st
 	if now.After(invitation.ExpiredAt) {
 		invitation.Status = model.ChatGroupInvitationStatusExpired
 		invitation.HandledAt = &now
-		_ = s.groupRepo.UpdateInvitation(invitation)
-		return core.NewBizError(http.StatusBadRequest, "invitation expired")
+		if err := s.groupRepo.UpdateInvitation(ctx, invitation); err != nil {
+			telemetry.Z().Errorf("mark invitation expired failed invitation_id=%d: %v", invitationID, err)
+		}
+		return transport.NewBizError(http.StatusBadRequest, "invitation expired")
 	}
 
 	switch action {
@@ -106,21 +110,21 @@ func (s *GroupService) ReviewInvitation(inviteeUID, invitationID uint, action st
 			LeftAt:   nil,
 		}
 
-		if err := s.groupRepo.AcceptInvitation(invitation, member); err != nil {
-			return core.NewBizError(http.StatusInternalServerError, "accept invitation failed")
+		if err := s.groupRepo.AcceptInvitation(ctx, invitation, member); err != nil {
+			return transport.NewBizError(http.StatusInternalServerError, "accept invitation failed")
 		}
-		s.refreshMembershipCache(invitation.GroupID)
+		s.refreshMembershipCache(ctx, invitation.GroupID)
 
 	case "reject":
 		invitation.Status = model.ChatGroupInvitationStatusRejected
 		invitation.HandledAt = &now
 
-		if err := s.groupRepo.UpdateInvitation(invitation); err != nil {
-			return core.NewBizError(http.StatusInternalServerError, "reject invitation failed")
+		if err := s.groupRepo.UpdateInvitation(ctx, invitation); err != nil {
+			return transport.NewBizError(http.StatusInternalServerError, "reject invitation failed")
 		}
 
 	default:
-		return core.NewBizError(http.StatusBadRequest, "invalid action")
+		return transport.NewBizError(http.StatusBadRequest, "invalid action")
 	}
 
 	return nil

@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"time"
 
-	"go-admin/internal/domain/model"
-	"go-admin/internal/dto"
+	"di/internal/domain/model"
+	"di/internal/dto"
 )
 
 // 打包mq事件存入db

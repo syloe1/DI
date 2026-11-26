@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "go-architecture-review": {
+      "source": "C:/Users/WK112/AppData/Local/Temp/go-agent-skills-src/repo",
+      "sourceType": "local",
+      "computedHash": "c2474508721ea16dc99dd7eed7b917ba1e50473a06d9634403ead83d3cff6d34"
+    }
+  }
+}

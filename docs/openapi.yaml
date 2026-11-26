@@ -951,6 +951,46 @@ paths:
         "200":
           $ref: "#/components/responses/OK"
 
+  /auth/groups/{id}/messages/sync:
+    get:
+      tags: [Group]
+      summary: 群消息断线补偿（增量同步）
+      description: |
+        返回 group_id 内 id 大于 after_id 的群消息，按 id 升序最多 limit 条。
+        每条消息直接包含 username（发送者用户名）。客户端持久化返回的 last_id 作为下次游标继续拉，
+        直到 has_more=false，即完成断线期间的补偿。要求当前用户是 active 群成员。
+      parameters:
+        - $ref: "#/components/parameters/GroupID"
+        - name: after_id
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        "200":
+          description: 增量群消息列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/GroupMessageSyncResult"
+        "404":
+          description: 群不存在或非群成员
+        "410":
+          description: 群已解散
+
   /ws:
     get:
       tags: [Realtime]
@@ -1267,6 +1307,35 @@ components:
                 type: string
               is_read:
                 type: boolean
+              created_at:
+                type: string
+                format: date-time
+        last_id:
+          type: integer
+          description: 下次 sync 的游标（客户端持久化）
+        has_more:
+          type: boolean
+          description: 是否还有更多（true 时用 last_id 继续拉）
+
+    GroupMessageSyncResult:
+      type: object
+      properties:
+        messages:
+          type: array
+          description: 本次增量拉取的群消息（id 升序，含发送者 username）
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+              group_id:
+                type: integer
+              sender_uid:
+                type: integer
+              username:
+                type: string
+              content:
+                type: string
               created_at:
                 type: string
                 format: date-time

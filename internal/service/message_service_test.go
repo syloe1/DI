@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"go-admin/internal/dao"
-	"go-admin/internal/domain/model"
+	"di/internal/dao"
+	"di/internal/domain/model"
 
 	"gorm.io/gorm"
 )
@@ -20,30 +20,32 @@ type fakeMessageRepo struct {
 	peerUsers      map[uint]*model.User
 }
 
-func (f *fakeMessageRepo) CreateMessage(message *model.Message) error { return nil }
-func (f *fakeMessageRepo) FindMessageByID(id uint) (*model.Message, error) {
+func (f *fakeMessageRepo) CreateMessage(ctx context.Context, message *model.Message) error {
+	return nil
+}
+func (f *fakeMessageRepo) FindMessageByID(ctx context.Context, id uint) (*model.Message, error) {
 	return nil, nil
 }
-func (f *fakeMessageRepo) GetConversations(userID uint) ([]dao.Conversation, error) {
+func (f *fakeMessageRepo) GetConversations(ctx context.Context, userID uint, cursor uint, limit int) ([]dao.Conversation, error) {
 	return nil, nil
 }
-func (f *fakeMessageRepo) GetMessages(userID uint, peerID uint, offset int, limit int) ([]model.Message, error) {
+func (f *fakeMessageRepo) GetMessages(ctx context.Context, userID uint, peerID uint, offset int, limit int) ([]model.Message, error) {
 	return nil, nil
 }
-func (f *fakeMessageRepo) MarkMessagesAsRead(userID uint, peerID uint) error {
+func (f *fakeMessageRepo) MarkMessagesAsRead(ctx context.Context, userID uint, peerID uint) error {
 	f.markReadCalled = true
 	return f.markReadError
 }
-func (f *fakeMessageRepo) CountUnreadMessages(userID uint, peerID uint) (int64, error) {
+func (f *fakeMessageRepo) CountUnreadMessages(ctx context.Context, userID uint, peerID uint) (int64, error) {
 	return 0, nil
 }
-func (f *fakeMessageRepo) FindUsersByIDs(ids []uint) (map[uint]*model.User, error) {
+func (f *fakeMessageRepo) FindUsersByIDs(ctx context.Context, ids []uint) (map[uint]*model.User, error) {
 	return f.peerUsers, nil
 }
-func (f *fakeMessageRepo) CountUnreadByPeers(userID uint, peerIDs []uint) (map[uint]int64, error) {
+func (f *fakeMessageRepo) CountUnreadByPeers(ctx context.Context, userID uint, peerIDs []uint) (map[uint]int64, error) {
 	return map[uint]int64{}, nil
 }
-func (f *fakeMessageRepo) SyncMessages(userID uint, afterID uint, limit int) ([]model.Message, error) {
+func (f *fakeMessageRepo) SyncMessages(ctx context.Context, userID uint, afterID uint, limit int) ([]model.Message, error) {
 	out := make([]model.Message, 0, len(f.syncMessages))
 	for _, m := range f.syncMessages {
 		if m.ID > afterID {
@@ -52,11 +54,13 @@ func (f *fakeMessageRepo) SyncMessages(userID uint, afterID uint, limit int) ([]
 	}
 	return out, nil
 }
-func (f *fakeMessageRepo) FindUnreadMessageIDs(userID uint, peerID uint) ([]uint, error) {
+func (f *fakeMessageRepo) FindUnreadMessageIDs(ctx context.Context, userID uint, peerID uint) ([]uint, error) {
 	return f.findUnreadIDs, nil
 }
-func (f *fakeMessageRepo) DeleteMessage(message *model.Message) error { return nil }
-func (f *fakeMessageRepo) FindUserByID(userID uint) (*model.User, error) {
+func (f *fakeMessageRepo) DeleteMessage(ctx context.Context, message *model.Message) error {
+	return nil
+}
+func (f *fakeMessageRepo) FindUserByID(ctx context.Context, userID uint) (*model.User, error) {
 	if u, ok := f.peerUsers[userID]; ok {
 		return u, nil
 	}

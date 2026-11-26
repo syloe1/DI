@@ -28,10 +28,10 @@ import (
 	"strings"
 	"time"
 
-	"go-admin/config"
-	"go-admin/internal/domain/model"
-	"go-admin/pkg/core"
-
+	"di/internal/config"
+	"di/internal/domain/model"
+	"di/internal/infra"
+	"di/internal/telemetry"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -43,7 +43,7 @@ const (
 )
 
 func main() {
-	configPath := flag.String("config", "config/config.yaml", "配置文件路径")
+	configPath := flag.String("config", "configs/config.yaml", "配置文件路径")
 	passwd := flag.String("demo-password", defaultPasswd, "演示账号密码（demo/alice/bob/carol 共用）")
 	purgeUsersPrefix := flag.String("purge-users-prefix", "", "清理指定用户名前缀的测试账号（如 review_）")
 	purgeDissolved := flag.Bool("purge-dissolved-groups", false, "清理所有已解散群及其成员/消息")
@@ -55,13 +55,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "load config failed: %v\n", err)
 		os.Exit(1)
 	}
-	if _, err := core.InitLogger(cfg.GetLoggerConfig().Level, cfg.GetLoggerConfig().Format); err != nil {
+	if _, err := telemetry.InitLogger(cfg.GetLoggerConfig().Level, cfg.GetLoggerConfig().Format); err != nil {
 		fmt.Fprintf(os.Stderr, "init logger failed: %v\n", err)
 		os.Exit(1)
 	}
-	defer core.SyncLogger()
+	defer telemetry.SyncLogger()
 
-	db, err := core.InitMysql(cfg.GetMysqlConfig())
+	db, err := infra.InitMysql(cfg.GetMysqlConfig())
 	if err != nil {
 		fatal("init mysql failed: %v", err)
 	}
@@ -73,7 +73,7 @@ func main() {
 	}
 	defer func() { _ = sqlDB.Close() }()
 
-	if err := core.RunMigrations(db); err != nil {
+	if err := infra.RunMigrations(db); err != nil {
 		fatal("run migrations failed: %v", err)
 	}
 

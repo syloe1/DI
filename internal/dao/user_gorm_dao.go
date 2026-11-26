@@ -1,7 +1,9 @@
 package dao
 
 import (
-	"go-admin/internal/domain/model"
+	"context"
+
+	"di/internal/domain/model"
 
 	"gorm.io/gorm"
 )
@@ -14,17 +16,17 @@ type GormUserDB struct {
 
 // Create 创建用户
 // 将用户信息插入到数据库中
-func (g *GormUserDB) Create(user *model.User) error {
+func (g *GormUserDB) Create(ctx context.Context, user *model.User) error {
 	//INSERT INTO users (...) VALUES (...);
-	return g.DB.Create(user).Error
+	return g.DB.WithContext(ctx).Create(user).Error
 }
 
 // FindByID 根据用户ID查询用户信息
 // 通过主键ID获取单条用户记录
-func (g *GormUserDB) FindByID(id uint) (*model.User, error) {
+func (g *GormUserDB) FindByID(ctx context.Context, id uint) (*model.User, error) {
 	var user model.User
 	//SELECT * FROM users WHERE id = ? LIMIT 1;
-	if err := g.DB.First(&user, id).Error; err != nil {
+	if err := g.DB.WithContext(ctx).First(&user, id).Error; err != nil {
 		return nil, err
 	}
 	return &user, nil
@@ -32,20 +34,19 @@ func (g *GormUserDB) FindByID(id uint) (*model.User, error) {
 
 // FindByUsername 根据用户名查询用户
 // 用于登录、用户名重复校验等场景
-func (g *GormUserDB) FindByUsername(username string) (*model.User, error) {
+func (g *GormUserDB) FindByUsername(ctx context.Context, username string) (*model.User, error) {
 	var user model.User
 	//SELECT * FROM users WHERE username = ? LIMIT 1;
-	if err := g.DB.Where("username = ?", username).First(&user).Error; err != nil {
+	if err := g.DB.WithContext(ctx).Where("username = ?", username).First(&user).Error; err != nil {
 		return nil, err
 	}
 	return &user, nil
 }
 
-// FindAll 查询所有用户
-// 获取用户列表，常用于后台管理展示全部用户
-func (g *GormUserDB) FindAll() ([]model.User, error) {
+// FindAll 分页查询用户（limit/offset，用于后台管理列表，避免全量结果集）
+func (g *GormUserDB) FindAll(ctx context.Context, limit, offset int) ([]model.User, error) {
 	var users []model.User
-	if err := g.DB.Find(&users).Error; err != nil {
+	if err := g.DB.WithContext(ctx).Order("id ASC").Limit(limit).Offset(offset).Find(&users).Error; err != nil {
 		return nil, err
 	}
 	return users, nil
@@ -53,9 +54,9 @@ func (g *GormUserDB) FindAll() ([]model.User, error) {
 
 // CountByUsername 统计指定用户名的数量
 // 用于校验用户名是否已被注册
-func (g *GormUserDB) CountByUsername(username string) (int64, error) {
+func (g *GormUserDB) CountByUsername(ctx context.Context, username string) (int64, error) {
 	var count int64
-	if err := g.DB.Model(&model.User{}).Where("username = ?", username).Count(&count).Error; err != nil {
+	if err := g.DB.WithContext(ctx).Model(&model.User{}).Where("username = ?", username).Count(&count).Error; err != nil {
 		return 0, err
 	}
 	return count, nil
@@ -63,10 +64,10 @@ func (g *GormUserDB) CountByUsername(username string) (int64, error) {
 
 // FindByUsernameLike 用户名模糊查询
 // 根据输入的关键词模糊匹配用户名，用于用户搜索功能
-func (g *GormUserDB) FindByUsernameLike(username string, limit int) ([]model.User, error) {
+func (g *GormUserDB) FindByUsernameLike(ctx context.Context, username string, limit int) ([]model.User, error) {
 	var users []model.User
 	// 注意：外部调用时需要拼接 % 关键字% 才能实现模糊搜索
-	if err := g.DB.Where("username LIKE ?", username).Limit(limit).Find(&users).Error; err != nil {
+	if err := g.DB.WithContext(ctx).Where("username LIKE ?", username).Limit(limit).Find(&users).Error; err != nil {
 		return nil, err
 	}
 	return users, nil
@@ -74,10 +75,10 @@ func (g *GormUserDB) FindByUsernameLike(username string, limit int) ([]model.Use
 
 // FindByIDs 根据用户ID列表批量查询用户
 // 一次性查询多个用户，提高接口效率
-func (g *GormUserDB) FindByIDs(ids []uint) ([]model.User, error) {
+func (g *GormUserDB) FindByIDs(ctx context.Context, ids []uint) ([]model.User, error) {
 	var users []model.User
 	//SELECT * FROM users WHERE id IN (?, ?, ?);
-	if err := g.DB.Where("id IN ?", ids).Find(&users).Error; err != nil {
+	if err := g.DB.WithContext(ctx).Where("id IN ?", ids).Find(&users).Error; err != nil {
 		return nil, err
 	}
 	return users, nil
@@ -85,21 +86,21 @@ func (g *GormUserDB) FindByIDs(ids []uint) ([]model.User, error) {
 
 // Update 更新用户信息
 // 保存用户的修改数据到数据库
-func (g *GormUserDB) Update(user *model.User) error {
-	return g.DB.Save(user).Error
+func (g *GormUserDB) Update(ctx context.Context, user *model.User) error {
+	return g.DB.WithContext(ctx).Save(user).Error
 }
 
 // Delete 根据ID删除用户
 // 根据主键ID删除对应的用户记录
-func (g *GormUserDB) Delete(id uint) error {
-	return g.DB.Delete(&model.User{}, id).Error
+func (g *GormUserDB) Delete(ctx context.Context, id uint) error {
+	return g.DB.WithContext(ctx).Delete(&model.User{}, id).Error
 }
 
-func (g *GormUserDB) UpdateRoleByIDs(ids []uint, role string) error {
+func (g *GormUserDB) UpdateRoleByIDs(ctx context.Context, ids []uint, role string) error {
 	if len(ids) == 0 {
 		return nil // 避免空切片导致全表更新
 	}
-	return g.DB.Model(&model.User{}).
+	return g.DB.WithContext(ctx).Model(&model.User{}).
 		Where("id IN (?)", ids).
 		Update("role", role).Error
 }

@@ -5,9 +5,8 @@ import (
 	"context"
 	"encoding/json"
 
-	"go-admin/internal/dto"
-	"go-admin/pkg/core"
-
+	"di/internal/dto"
+	"di/internal/infra"
 	"github.com/rabbitmq/amqp091-go"
 )
 
@@ -16,11 +15,11 @@ type GroupMessagePublisher interface {
 }
 
 type RabbitGroupMessagePublisher struct {
-	rabbit   *core.RabbitMQ
+	rabbit   *infra.RabbitMQ
 	exchange string
 }
 
-func NewRabbitGroupMessagePublisher(rabbit *core.RabbitMQ, exchange string) *RabbitGroupMessagePublisher {
+func NewRabbitGroupMessagePublisher(rabbit *infra.RabbitMQ, exchange string) *RabbitGroupMessagePublisher {
 	return &RabbitGroupMessagePublisher{
 		rabbit:   rabbit,
 		exchange: exchange,
@@ -37,8 +36,9 @@ func (p *RabbitGroupMessagePublisher) PublishGroupMessageCreated(ctx context.Con
 }
 
 func (p *RabbitGroupMessagePublisher) PublishRaw(ctx context.Context, body []byte) error {
-	// 每次从 RabbitMQ 现取当前通道：断线重连后自动指向新通道
-	return p.rabbit.PublishChan().PublishWithContext(
+	// 走带 publisher confirm 的发布：broker 确认持久化后才算成功。
+	// outbox 据此才标记 published（套接字写成功不再等于已投递），失败则走现有重试/失败逻辑。
+	return p.rabbit.PublishWithConfirm(
 		ctx,
 		p.exchange,
 		"",

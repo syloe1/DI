@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"di/internal/telemetry"
 	"flag"
 	"fmt"
-	"go-admin/pkg/core"
 	"io"
 	"net/http"
 	"sort"
@@ -39,7 +39,7 @@ func main() {
 	flag.Parse()
 
 	if *mode != "http" && *mode != "ws" {
-		core.Z().Fatalf("invalid mode: %s", *mode)
+		telemetry.Z().Fatalf("invalid mode: %s", *mode)
 	}
 
 	start := time.Now()

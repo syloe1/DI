@@ -1,18 +1,19 @@
 package dao
 
 import (
+	"context"
 	"time"
 
-	"go-admin/internal/domain/model"
+	"di/internal/domain/model"
 
 	"gorm.io/gorm"
 )
 
 type OutboxRepository interface {
-	ClaimDue(limit int, now time.Time, claimer string, staleAfter time.Duration) ([]model.MessageOutbox, error)
-	CountByStatus(status string) (int64, error)
-	MarkPublished(id uint, now time.Time) error
-	MarkFailed(id uint, retryCount int, nextRetryAt time.Time, lastError string) error
+	ClaimDue(ctx context.Context, limit int, now time.Time, claimer string, staleAfter time.Duration) ([]model.MessageOutbox, error)
+	CountByStatus(ctx context.Context, status string) (int64, error)
+	MarkPublished(ctx context.Context, id uint, now time.Time) error
+	MarkFailed(ctx context.Context, id uint, retryCount int, nextRetryAt time.Time, lastError string) error
 }
 
 type GormOutboxRepository struct {
@@ -23,11 +24,11 @@ func NewGormOutboxRepository(db *gorm.DB) *GormOutboxRepository {
 	return &GormOutboxRepository{db: db}
 }
 
-func (r *GormOutboxRepository) ClaimDue(limit int, now time.Time, claimer string, staleAfter time.Duration) ([]model.MessageOutbox, error) {
+func (r *GormOutboxRepository) ClaimDue(ctx context.Context, limit int, now time.Time, claimer string, staleAfter time.Duration) ([]model.MessageOutbox, error) {
 	var outboxes []model.MessageOutbox
 	staleBefore := now.Add(-staleAfter)
 
-	err := r.db.Transaction(func(tx *gorm.DB) error {
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Raw(
 			`SELECT * FROM message_outboxes
 			 WHERE (
@@ -80,19 +81,15 @@ func (r *GormOutboxRepository) ClaimDue(limit int, now time.Time, claimer string
 	return outboxes, err
 }
 
-func (r *GormOutboxRepository) CountByStatus(status string) (int64, error) {
+func (r *GormOutboxRepository) CountByStatus(ctx context.Context, status string) (int64, error) {
 	var count int64
 	//SELECT COUNT(*) FROM message_outboxes WHERE status = ?
-	err := r.db.Model(&model.MessageOutbox{}).Where("status = ?", status).Count(&count).Error
+	err := r.db.WithContext(ctx).Model(&model.MessageOutbox{}).Where("status = ?", status).Count(&count).Error
 	return count, err
 }
 
-func (r *GormOutboxRepository) MarkPublished(id uint, now time.Time) error {
-	/*
-		update message_ouotboxes
-		set status = published, published_at = ? where id = ?
-	*/
-	return r.db.Model(&model.MessageOutbox{}).
+func (r *GormOutboxRepository) MarkPublished(ctx context.Context, id uint, now time.Time) error {
+	return r.db.WithContext(ctx).Model(&model.MessageOutbox{}).
 		Where("id = ?", id).
 		Updates(map[string]interface{}{
 			"status":       model.MessageOutboxStatusPublished,
@@ -103,13 +100,13 @@ func (r *GormOutboxRepository) MarkPublished(id uint, now time.Time) error {
 		}).Error
 }
 
-func (r *GormOutboxRepository) MarkFailed(id uint, retryCount int, nextRetryAt time.Time, lastError string) error {
+func (r *GormOutboxRepository) MarkFailed(ctx context.Context, id uint, retryCount int, nextRetryAt time.Time, lastError string) error {
 	status := model.MessageOutboxStatusPending
 	if retryCount >= 10 {
 		status = model.MessageOutboxStatusFailed
 	}
 
-	return r.db.Model(&model.MessageOutbox{}).
+	return r.db.WithContext(ctx).Model(&model.MessageOutbox{}).
 		Where("id = ?", id).
 		Updates(map[string]interface{}{
 			"status":        status,

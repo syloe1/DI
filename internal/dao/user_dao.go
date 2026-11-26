@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"go-admin/internal/domain/model"
+	"di/internal/domain/model"
 )
 
 type ZSetMemberScore struct {
@@ -13,16 +13,16 @@ type ZSetMemberScore struct {
 }
 
 type UserDB interface {
-	Create(user *model.User) error
-	FindByID(id uint) (*model.User, error)
-	FindByUsername(username string) (*model.User, error)
-	Update(user *model.User) error
-	Delete(id uint) error
-	FindAll() ([]model.User, error)
-	FindByIDs(ids []uint) ([]model.User, error)
-	CountByUsername(username string) (int64, error)
-	FindByUsernameLike(username string, limit int) ([]model.User, error)
-	UpdateRoleByIDs(ids []uint, role string) error
+	Create(ctx context.Context, user *model.User) error
+	FindByID(ctx context.Context, id uint) (*model.User, error)
+	FindByUsername(ctx context.Context, username string) (*model.User, error)
+	Update(ctx context.Context, user *model.User) error
+	Delete(ctx context.Context, id uint) error
+	FindAll(ctx context.Context, limit, offset int) ([]model.User, error)
+	FindByIDs(ctx context.Context, ids []uint) ([]model.User, error)
+	CountByUsername(ctx context.Context, username string) (int64, error)
+	FindByUsernameLike(ctx context.Context, username string, limit int) ([]model.User, error)
+	UpdateRoleByIDs(ctx context.Context, ids []uint, role string) error
 }
 
 type UserCache interface {
@@ -40,6 +40,7 @@ type UserCache interface {
 	SIsMember(ctx context.Context, key string, member interface{}) (bool, error)
 	SMembers(ctx context.Context, key string) ([]string, error)
 	Del(ctx context.Context, keys ...string) error
+	Expire(ctx context.Context, key string, ttl time.Duration) error
 }
 
 type JWTConfig interface {

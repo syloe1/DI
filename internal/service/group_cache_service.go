@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"time"
 
-	"go-admin/internal/dao"
-	"go-admin/internal/domain/model"
+	"di/internal/dao"
+	"di/internal/domain/model"
 
 	"github.com/go-redis/redis/v8"
 )
@@ -37,7 +37,7 @@ func NewGroupCacheService(client *redis.Client, groupRepo dao.GroupRepository) *
 // 先读 Redis 缓存，没有就查数据库，查到后自动写回缓存，下次直接用。
 func (s *GroupCacheService) ActiveMemberIDs(ctx context.Context, groupID uint) ([]uint, error) {
 	if s == nil || s.client == nil {
-		return s.loadActiveMemberIDsFromDB(groupID)
+		return s.loadActiveMemberIDsFromDB(ctx, groupID)
 	}
 
 	key := groupMembersKey(groupID)
@@ -49,7 +49,7 @@ func (s *GroupCacheService) ActiveMemberIDs(ctx context.Context, groupID uint) (
 	//缓存不存在啊
 	if len(values) == 0 {
 		//查DB
-		ids, err := s.loadActiveMemberIDsFromDB(groupID)
+		ids, err := s.loadActiveMemberIDsFromDB(ctx, groupID)
 		if err != nil {
 			return nil, err
 		}
@@ -78,7 +78,7 @@ func (s *GroupCacheService) RefreshActiveMembers(ctx context.Context, groupID ui
 		return nil
 	}
 
-	ids, err := s.loadActiveMemberIDsFromDB(groupID)
+	ids, err := s.loadActiveMemberIDsFromDB(ctx, groupID)
 	if err != nil {
 		return err
 	}
@@ -105,7 +105,7 @@ func (s *GroupCacheService) AddUserOnlineGroups(ctx context.Context, userID uint
 		return nil
 	}
 	//查询用户加入了哪些群
-	groups, err := s.groupRepo.ListGroupsByUserID(userID)
+	groups, err := s.groupRepo.ListGroupsByUserID(ctx, userID)
 	if err != nil {
 		return err
 	}
@@ -116,10 +116,11 @@ func (s *GroupCacheService) AddUserOnlineGroups(ctx context.Context, userID uint
 		if group.Status != model.ChatGroupStatusNormal {
 			continue
 		}
-		//写入群的在线分片
-		pipe.SAdd(ctx, groupOnlineShardKey(group.GroupID, uid, s.shards), uid)
-		//给在线状态设置过期时间
-		pipe.Expire(ctx, groupOnlineBaseKey(group.GroupID), presenceTTL)
+		// 写入群的在线分片，并给「同一个 shard key」设置过期时间
+		// （之前 Expire 设在 base key 上，shard key 永不过期导致 key 单向增长）
+		shardKey := groupOnlineShardKey(group.GroupID, uid, s.shards)
+		pipe.SAdd(ctx, shardKey, uid)
+		pipe.Expire(ctx, shardKey, presenceTTL)
 	}
 	_, err = pipe.Exec(ctx)
 	return err
@@ -131,7 +132,7 @@ func (s *GroupCacheService) RemoveUserOnlineGroups(ctx context.Context, userID u
 		return nil
 	}
 
-	groups, err := s.groupRepo.ListGroupsByUserID(userID)
+	groups, err := s.groupRepo.ListGroupsByUserID(ctx, userID)
 	if err != nil {
 		return err
 	}
@@ -148,19 +149,21 @@ func (s *GroupCacheService) RemoveUserOnlineGroups(ctx context.Context, userID u
 
 func (s *GroupCacheService) OnlineMemberIDsByShard(ctx context.Context, groupID uint) ([][]uint, error) {
 	result := make([][]uint, s.shards)
-	//[分片1 ... 分片15]
 	if s == nil || s.client == nil {
 		return result, nil
 	}
 
+	// 一次 pipeline 读取所有分片，替代逐个 SMembers 的串行往返
+	pipe := s.client.Pipeline()
+	cmds := make([]*redis.StringSliceCmd, 0, s.shards)
 	for shard := 0; shard < s.shards; shard++ {
-		//获取当前分片的Redis Key
-		//看分片里面的在线用户
-		values, err := s.client.SMembers(ctx, groupOnlineShardIndexKey(groupID, shard)).Result()
-		if err != nil && err != redis.Nil {
-			return nil, err
-		}
-		result[shard] = parseUintSet(values)
+		cmds = append(cmds, pipe.SMembers(ctx, groupOnlineShardIndexKey(groupID, shard)))
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, err
+	}
+	for shard, cmd := range cmds {
+		result[shard] = parseUintSet(cmd.Val())
 	}
 	return result, nil
 }
@@ -195,8 +198,8 @@ func (s *GroupCacheService) ActiveOnlineMemberIDsByShard(ctx context.Context, gr
 	return onlineShards, nil
 }
 
-func (s *GroupCacheService) loadActiveMemberIDsFromDB(groupID uint) ([]uint, error) {
-	members, err := s.groupRepo.ListActiveMembers(groupID)
+func (s *GroupCacheService) loadActiveMemberIDsFromDB(ctx context.Context, groupID uint) ([]uint, error) {
+	members, err := s.groupRepo.ListActiveMembers(ctx, groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -211,11 +214,6 @@ func (s *GroupCacheService) loadActiveMemberIDsFromDB(groupID uint) ([]uint, err
 // 生成群活跃成员缓存的Redis Key
 func groupMembersKey(groupID uint) string {
 	return fmt.Sprintf("group_members:%d", groupID)
-}
-
-// 查找群在线状态的基础Redis Key
-func groupOnlineBaseKey(groupID uint) string {
-	return fmt.Sprintf("group_online:%d", groupID)
 }
 
 // 用户哈希分片算法 同一个用户， 永远分配到同一个分片上

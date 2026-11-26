@@ -1,9 +1,9 @@
-package core
+package infra
 
 import (
 	"context"
+	"di/internal/config"
 	"fmt"
-	"go-admin/config"
 
 	"github.com/go-redis/redis/v8"
 )

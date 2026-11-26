@@ -3,8 +3,7 @@ package middleware
 import (
 	"net/http"
 
-	"go-admin/pkg/core"
-
+	"di/internal/transport"
 	"github.com/gin-gonic/gin"
 )
 
@@ -19,7 +18,7 @@ func AdminAuth() gin.HandlerFunc {
 		// 判断角色是否为 admin 管理员 或 superadmin 超级管理员
 		if role != "admin" && role != "superadmin" {
 			// 不是管理员，返回无权限错误
-			core.Fail(c, http.StatusForbidden, "无权限")
+			transport.Fail(c, http.StatusForbidden, "无权限")
 			c.Abort() // 中断请求，不再执行后续接口
 			return
 		}

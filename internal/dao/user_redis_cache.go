@@ -99,3 +99,8 @@ func (r *RedisUserCache) SMembers(ctx context.Context, key string) ([]string, er
 func (r *RedisUserCache) Del(ctx context.Context, keys ...string) error {
 	return r.Client.Del(ctx, keys...).Err()
 }
+
+// Expire 给已有 key 设置过期时间（用于给 HSet 写入的 hash 补 TTL）
+func (r *RedisUserCache) Expire(ctx context.Context, key string, ttl time.Duration) error {
+	return r.Client.Expire(ctx, key, ttl).Err()
+}

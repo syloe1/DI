@@ -9,11 +9,11 @@ import (
 	"sync"
 	"time"
 
-	"go-admin/internal/dao"
-	"go-admin/internal/domain/model"
-	"go-admin/internal/dto"
-	"go-admin/pkg/core"
-
+	"di/internal/dao"
+	"di/internal/domain/model"
+	"di/internal/dto"
+	"di/internal/infra"
+	"di/internal/telemetry"
 	"github.com/rabbitmq/amqp091-go"
 )
 
@@ -27,7 +27,7 @@ const (
 )
 
 type GroupMessageConsumer struct {
-	rabbit      *core.RabbitMQ      // RabbitMQ（断线重连后自动指向新通道）
+	rabbit      *infra.RabbitMQ     // RabbitMQ（断线重连后自动指向新通道）
 	queue       string              // 消费队列名
 	groupRepo   dao.GroupRepository // 群数据库DAO
 	groupCache  *GroupCacheService  // 群成员/在线缓存服务（前面整套分片缓存）
@@ -37,7 +37,7 @@ type GroupMessageConsumer struct {
 	pushWorkers int                 // 分片推送协程数
 }
 
-func NewGroupMessageConsumer(rabbit *core.RabbitMQ, queue string, groupRepo dao.GroupRepository, groupCache *GroupCacheService, cache dao.UserCache, hub *WSHub) *GroupMessageConsumer {
+func NewGroupMessageConsumer(rabbit *infra.RabbitMQ, queue string, groupRepo dao.GroupRepository, groupCache *GroupCacheService, cache dao.UserCache, hub *WSHub) *GroupMessageConsumer {
 	return &GroupMessageConsumer{
 		rabbit:      rabbit,
 		queue:       queue,
@@ -113,14 +113,14 @@ func (c *GroupMessageConsumer) workerLoop(ctx context.Context, tasks <-chan amqp
 				return
 			}
 			if err := c.handleDelivery(ctx, d); err != nil {
-				core.Z().Errorf("consume group message event failed: %v", err)
-				core.Metrics.ConsumerFailed.Add(1)
+				c.logDeliveryError(d, err)
+				telemetry.Metrics.ConsumerFailed.Add(1)
 				_ = d.Nack(false, false)
 				continue
 			}
 			//手动确认
 			_ = d.Ack(false)
-			core.Metrics.ConsumerSucceeded.Add(1)
+			telemetry.Metrics.ConsumerSucceeded.Add(1)
 		}
 	}
 }
@@ -147,7 +147,7 @@ func (c *GroupMessageConsumer) handleDelivery(ctx context.Context, d amqp091.Del
 		return nil
 	}
 
-	group, err := c.groupRepo.FindGroupByID(event.GroupID)
+	group, err := c.groupRepo.FindGroupByID(ctx, event.GroupID)
 	if err != nil {
 		_ = c.clearProcessing(ctx, dedupeKey)
 		return err
@@ -182,10 +182,28 @@ func (c *GroupMessageConsumer) handleDelivery(ctx context.Context, d amqp091.Del
 	//分片并发推送
 	c.pushShards(ctx, shards, out)
 	if err := c.markDone(ctx, dedupeKey); err != nil {
-		core.Z().Errorf("mark consumer event done failed: %v", err)
+		telemetry.Z().With(
+			"message_id", event.MessageID,
+			"group_id", event.GroupID,
+			"user_id", event.FromUID,
+			"request_id", event.RequestID,
+		).Errorf("mark consumer event done failed: %v", err)
 	}
 
 	return nil
+}
+
+// logDeliveryError 消费出错日志带关键字段（message_id/group_id/user_id/request_id），
+// 便于线上定位「哪条群消息没推出去」。字段从事件 payload 反解，缺失则为零值/空。
+func (c *GroupMessageConsumer) logDeliveryError(d amqp091.Delivery, err error) {
+	var event dto.GroupMessageCreatedEvent
+	_ = json.Unmarshal(d.Body, &event)
+	telemetry.Z().With(
+		"message_id", event.MessageID,
+		"group_id", event.GroupID,
+		"user_id", event.FromUID,
+		"request_id", event.RequestID,
+	).Errorf("consume group message event failed: %v", err)
 }
 
 func (c *GroupMessageConsumer) markProcessing(ctx context.Context, dedupeKey string) (bool, error) {
@@ -246,7 +264,7 @@ func (c *GroupMessageConsumer) targetOnlineShards(ctx context.Context, groupID u
 		return c.groupCache.ActiveOnlineMemberIDsByShard(ctx, groupID)
 	}
 
-	members, err := c.groupRepo.ListActiveMembers(groupID)
+	members, err := c.groupRepo.ListActiveMembers(ctx, groupID)
 	if err != nil {
 		return nil, err
 	}

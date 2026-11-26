@@ -1,8 +1,10 @@
 package service
 
 import (
-	"go-admin/internal/domain/model"
-	"go-admin/pkg/core"
+	"context"
+	"di/internal/domain/model"
+	"di/internal/telemetry"
+	"di/internal/transport"
 	"net/http"
 	"strings"
 	"time"
@@ -19,32 +21,32 @@ pending 重复申请返回已有申请
 拒绝后 24 小时内不能再次申请
 申请有效期 7 天
 */
-func (s *GroupService) ApplyJoinGroup(userID, groupID uint, reason string) (*model.ChatGroupJoinRequest, error) {
-	if _, err := s.getNormalGroup(groupID); err != nil {
+func (s *GroupService) ApplyJoinGroup(ctx context.Context, userID, groupID uint, reason string) (*model.ChatGroupJoinRequest, error) {
+	if _, err := s.getNormalGroup(ctx, groupID); err != nil {
 		return nil, err
 	}
 
-	if _, err := s.groupRepo.FindUserByID(userID); err != nil {
-		return nil, core.NewBizError(http.StatusNotFound, "user not found")
+	if _, err := s.groupRepo.FindUserByID(ctx, userID); err != nil {
+		return nil, transport.NewBizError(http.StatusNotFound, "user not found")
 	}
 
-	if member, err := s.groupRepo.FindMember(groupID, userID); err == nil && member.Status == model.ChatGroupMemberStatusActive {
-		return nil, core.NewBizError(http.StatusBadRequest, "already in group")
+	if member, err := s.groupRepo.FindMember(ctx, groupID, userID); err == nil && member.Status == model.ChatGroupMemberStatusActive {
+		return nil, transport.NewBizError(http.StatusBadRequest, "already in group")
 	}
 
-	if req, err := s.groupRepo.FindPendingJoinRequest(groupID, userID); err == nil {
+	if req, err := s.groupRepo.FindPendingJoinRequest(ctx, groupID, userID); err == nil {
 		return req, nil
 	}
 
-	if rejected, err := s.groupRepo.FindLatestRejectedJoinRequest(groupID, userID); err == nil {
+	if rejected, err := s.groupRepo.FindLatestRejectedJoinRequest(ctx, groupID, userID); err == nil {
 		if time.Since(rejected.CreatedAt) < 24*time.Hour {
-			return nil, core.NewBizError(http.StatusBadRequest, "can apply again after 24 hours")
+			return nil, transport.NewBizError(http.StatusBadRequest, "can apply again after 24 hours")
 		}
 	}
 
 	reason = strings.TrimSpace(reason)
 	if len(reason) > 255 {
-		return nil, core.NewBizError(http.StatusBadRequest, "reason is too long")
+		return nil, transport.NewBizError(http.StatusBadRequest, "reason is too long")
 	}
 
 	req := &model.ChatGroupJoinRequest{
@@ -55,8 +57,8 @@ func (s *GroupService) ApplyJoinGroup(userID, groupID uint, reason string) (*mod
 		ExpiredAt: time.Now().Add(7 * 24 * time.Hour),
 	}
 
-	if err := s.groupRepo.CreateJoinRequest(req); err != nil {
-		return nil, core.NewBizError(http.StatusInternalServerError, "create join request failed")
+	if err := s.groupRepo.CreateJoinRequest(ctx, req); err != nil {
+		return nil, transport.NewBizError(http.StatusInternalServerError, "create join request failed")
 	}
 
 	return req, nil
@@ -70,27 +72,27 @@ approve：状态 approved，加入/恢复成员
 reject：状态 rejected
 reviewer_uid/reviewed_at 要写
 */
-func (s *GroupService) ReviewJoinRequest(operatorUID, requestID uint, action string) error {
-	req, err := s.groupRepo.FindJoinRequestByID(requestID)
+func (s *GroupService) ReviewJoinRequest(ctx context.Context, operatorUID, requestID uint, action string) error {
+	req, err := s.groupRepo.FindJoinRequestByID(ctx, requestID)
 	if err != nil {
-		return core.NewBizError(http.StatusNotFound, "join request not found")
+		return transport.NewBizError(http.StatusNotFound, "join request not found")
 	}
 
 	if req.Status != model.ChatGroupJoinRequestStatusPending {
-		return core.NewBizError(http.StatusBadRequest, "join request is not pending")
+		return transport.NewBizError(http.StatusBadRequest, "join request is not pending")
 	}
 
-	if _, err := s.getNormalGroup(req.GroupID); err != nil {
+	if _, err := s.getNormalGroup(ctx, req.GroupID); err != nil {
 		return err
 	}
 
-	operator, err := s.getActiveMember(req.GroupID, operatorUID, "not a group member")
+	operator, err := s.getActiveMember(ctx, req.GroupID, operatorUID, "not a group member")
 	if err != nil {
 		return err
 	}
 
 	if operator.Role != model.ChatGroupMemberRoleOwner && operator.Role != model.ChatGroupMemberRoleAdmin {
-		return core.NewBizError(http.StatusForbidden, "only owner or admin can review join request")
+		return transport.NewBizError(http.StatusForbidden, "only owner or admin can review join request")
 	}
 
 	now := time.Now()
@@ -98,8 +100,10 @@ func (s *GroupService) ReviewJoinRequest(operatorUID, requestID uint, action str
 		req.Status = model.ChatGroupJoinRequestStatusExpired
 		req.ReviewerUID = &operatorUID
 		req.ReviewedAt = &now
-		_ = s.groupRepo.UpdateJoinRequest(req)
-		return core.NewBizError(http.StatusBadRequest, "join request expired")
+		if err := s.groupRepo.UpdateJoinRequest(ctx, req); err != nil {
+			telemetry.Z().Errorf("mark join request expired failed request_id=%d: %v", requestID, err)
+		}
+		return transport.NewBizError(http.StatusBadRequest, "join request expired")
 	}
 
 	req.ReviewerUID = &operatorUID
@@ -118,42 +122,48 @@ func (s *GroupService) ReviewJoinRequest(operatorUID, requestID uint, action str
 			LeftAt:   nil,
 		}
 
-		if err := s.groupRepo.ApproveJoinRequest(req, member); err != nil {
-			return core.NewBizError(http.StatusInternalServerError, "approve join request failed")
+		if err := s.groupRepo.ApproveJoinRequest(ctx, req, member); err != nil {
+			return transport.NewBizError(http.StatusInternalServerError, "approve join request failed")
 		}
-		s.refreshMembershipCache(req.GroupID)
+		s.refreshMembershipCache(ctx, req.GroupID)
 
 	case "reject":
 		req.Status = model.ChatGroupJoinRequestStatusRejected
 
-		if err := s.groupRepo.UpdateJoinRequest(req); err != nil {
-			return core.NewBizError(http.StatusInternalServerError, "reject join request failed")
+		if err := s.groupRepo.UpdateJoinRequest(ctx, req); err != nil {
+			return transport.NewBizError(http.StatusInternalServerError, "reject join request failed")
 		}
 
 	default:
-		return core.NewBizError(http.StatusBadRequest, "invalid action")
+		return transport.NewBizError(http.StatusBadRequest, "invalid action")
 	}
 
 	return nil
 }
 
-func (s *GroupService) GetJoinRequests(userID, groupID uint) ([]JoinRequestItem, error) {
-	if _, err := s.getNormalGroup(groupID); err != nil {
+func (s *GroupService) GetJoinRequests(ctx context.Context, userID, groupID uint, page, pageSize int) ([]JoinRequestItem, error) {
+	if _, err := s.getNormalGroup(ctx, groupID); err != nil {
 		return nil, err
 	}
 
-	operator, err := s.getActiveMember(groupID, userID, "not a group member")
+	operator, err := s.getActiveMember(ctx, groupID, userID, "not a group member")
 	if err != nil {
 		return nil, err
 	}
 
 	if operator.Role != model.ChatGroupMemberRoleOwner && operator.Role != model.ChatGroupMemberRoleAdmin {
-		return nil, core.NewBizError(http.StatusForbidden, "only owner or admin can view join requests")
+		return nil, transport.NewBizError(http.StatusForbidden, "only owner or admin can view join requests")
 	}
 
-	requests, err := s.groupRepo.ListJoinRequestsByGroupID(groupID)
+	page, pageSize = normalizePagination(page, pageSize, 1, 20)
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	offset := (page - 1) * pageSize
+
+	requests, err := s.groupRepo.ListJoinRequestsByGroupID(ctx, groupID, pageSize, offset)
 	if err != nil {
-		return nil, core.NewBizError(http.StatusInternalServerError, "get join requests failed")
+		return nil, transport.NewBizError(http.StatusInternalServerError, "get join requests failed")
 	}
 
 	result := make([]JoinRequestItem, 0, len(requests))

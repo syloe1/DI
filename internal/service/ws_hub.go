@@ -3,16 +3,15 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"strings"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"go-admin/internal/dao"
-	"go-admin/internal/domain/model"
-	"go-admin/internal/dto"
-	"go-admin/pkg/core"
-
+	"di/internal/dao"
+	"di/internal/dto"
+	"di/internal/telemetry"
+	"di/internal/transport"
 	"github.com/gorilla/websocket"
 )
 
@@ -37,6 +36,12 @@ type WSHub struct {
 	GroupCache  *GroupCacheService
 	Cache       dao.UserCache
 	Ctx         context.Context
+
+	// MessageService / GroupService：统一 WS 与 HTTP 发送链路。
+	// WS 发消息委托给同一套 service 逻辑（防抖/自检/2000 字长校验），不在 hub 里重复业务。
+	// 由 container 通过 SetServices 注入（绕开与 WSService 的构造期循环依赖）。
+	MessageService *MessageService
+	GroupService   *GroupService
 }
 
 func NewWSHub(messageRepo dao.MessageRepository, groupRepo dao.GroupRepository, publisher GroupMessagePublisher, presence *PresenceService, groupCache *GroupCacheService, cache dao.UserCache, ctx context.Context) *WSHub {
@@ -53,6 +58,14 @@ func NewWSHub(messageRepo dao.MessageRepository, groupRepo dao.GroupRepository, 
 		Ctx:         ctx,
 	}
 }
+
+// SetServices 注入消息/群服务（统一 WS/HTTP 发送链路）。
+// 在 container 里所有 service 创建完成后调用一次，早于任何 WS 连接建立，无并发写。
+func (h *WSHub) SetServices(messageService *MessageService, groupService *GroupService) {
+	h.MessageService = messageService
+	h.GroupService = groupService
+}
+
 func (h *WSHub) Run() {
 	for {
 		select {
@@ -74,10 +87,10 @@ func (h *WSHub) SendMessageToUser(userID uint, message []byte) {
 
 	select {
 	case client.Send <- message:
-		core.Metrics.PushDelivered.Add(1)
+		telemetry.Metrics.PushDelivered.Add(1)
 	default:
 		// 慢客户端：通道已满，标记丢弃指标
-		core.Metrics.PushDroppedSlow.Add(1)
+		telemetry.Metrics.PushDroppedSlow.Add(1)
 		// 不直接调用 unregisterClient（会获取写锁，与当前可能持有的读锁死锁），
 		// 改为异步投递到 Unregister 通道，让 Hub 事件循环安全处理。
 		select {
@@ -140,16 +153,20 @@ func (h *WSHub) registerClient(client *WSClient) {
 	uid := client.UserID
 	go func() {
 		if isNewUser {
-			core.Metrics.OnlineConnections.Add(1)
+			telemetry.Metrics.OnlineConnections.Add(1)
 		}
 
 		if h.Presence != nil {
-			_ = h.Presence.RegisterOnline(h.Ctx, uid)
+			if err := h.Presence.RegisterOnline(h.Ctx, uid); err != nil {
+				telemetry.Z().Warnf("register online failed user_id=%d: %v", uid, err)
+			}
 		}
 		if h.GroupCache != nil {
-			_ = h.GroupCache.AddUserOnlineGroups(h.Ctx, uid)
+			if err := h.GroupCache.AddUserOnlineGroups(h.Ctx, uid); err != nil {
+				telemetry.Z().Warnf("add user online groups failed user_id=%d: %v", uid, err)
+			}
 		}
-		core.Z().Infof("user %d connected", uid)
+		telemetry.Z().Infof("user %d connected", uid)
 	}()
 }
 
@@ -171,21 +188,25 @@ func (h *WSHub) unregisterClient(client *WSClient) {
 	// IO 异步
 	uid := client.UserID
 	go func() {
-		core.Metrics.OnlineConnections.Add(-1)
+		telemetry.Metrics.OnlineConnections.Add(-1)
 
 		if h.Presence != nil {
-			_ = h.Presence.UnregisterOnline(h.Ctx, uid)
+			if err := h.Presence.UnregisterOnline(h.Ctx, uid); err != nil {
+				telemetry.Z().Warnf("unregister online failed user_id=%d: %v", uid, err)
+			}
 		}
 		if h.GroupCache != nil {
-			_ = h.GroupCache.RemoveUserOnlineGroups(h.Ctx, uid)
+			if err := h.GroupCache.RemoveUserOnlineGroups(h.Ctx, uid); err != nil {
+				telemetry.Z().Warnf("remove user online groups failed user_id=%d: %v", uid, err)
+			}
 		}
-		core.Z().Infof("user %d disconnected", uid)
+		telemetry.Z().Infof("user %d disconnected", uid)
 	}()
 }
 
 // 但websocket客户端发送消息太慢， 主动断开
 func (h *WSHub) dropSlowClient(client *WSClient) {
-	core.Z().Warnf("drop slow websocket client user_id=%d", client.UserID)
+	telemetry.Z().Warnf("drop slow websocket client user_id=%d", client.UserID)
 	h.unregisterClient(client)
 }
 
@@ -246,100 +267,55 @@ func (c *WSClient) readPump() {
 }
 
 func (c *WSClient) handleMessage(toUID uint, content string) {
-	if _, err := c.Hub.MessageRepo.FindUserByID(toUID); err != nil {
-		c.sendWSError("user not found")
-		return
-	}
-
-	message := &model.Message{
-		FromUID: c.UserID,
-		ToUID:   toUID,
-		Content: content,
-		IsRead:  false,
-	}
-	// 同步落库拿到 id，再按前端契约推 data 包裹的标准帧（与 HTTP 路径一致）
-	if err := c.Hub.MessageRepo.CreateMessage(message); err != nil {
-		core.Z().Errorf("save message failed: %v", err)
+	// 统一走 MessageService.SendMessage：目标存在 / 不能发自己 / 防抖与 HTTP 一致。
+	// 落库后由 onPrivateMessage 回调推送 message 事件给收件人；这里只补发送确认帧。
+	msgSvc := c.Hub.MessageService
+	if msgSvc == nil {
 		c.sendWSError("send message failed")
 		return
 	}
 
-	now := time.Now().Format(time.RFC3339)
-	receiverMsg, _ := marshalWithPool(map[string]interface{}{
-		"type": "message",
-		"data": map[string]interface{}{
-			"id":         message.ID,
-			"from_uid":   c.UserID,
-			"to_uid":     toUID,
-			"content":    content,
-			"created_at": now,
-		},
-	})
-	c.Hub.SendMessageToUser(toUID, receiverMsg)
+	result, err := msgSvc.SendMessage(c.Hub.Ctx, c.UserID, toUID, content)
+	if err != nil {
+		telemetry.Z().With(
+			"user_id", c.UserID,
+			"to_uid", toUID,
+		).Errorf("ws send private message failed: %v", err)
+		c.sendWSErrorFromError(err, "send message failed")
+		return
+	}
 
 	confirmMsg, _ := marshalWithPool(map[string]interface{}{
 		"type": "message_sent",
 		"data": map[string]interface{}{
-			"id":         message.ID,
+			"id":         result.MessageID,
 			"to_uid":     toUID,
 			"content":    content,
-			"created_at": now,
+			"created_at": result.CreatedAt.Format(time.RFC3339),
 		},
 	})
 	c.Hub.SendMessageToUser(c.UserID, confirmMsg)
 }
 
 func (c *WSClient) handleGroupMessage(groupID uint, content string) {
-	content = strings.TrimSpace(content)
-	if groupID == 0 || content == "" {
-		c.sendWSError("invalid group message")
-		return
-	}
-
-	group, err := c.Hub.GroupRepo.FindGroupByID(groupID)
-	if err != nil {
-		c.sendWSError("group not found")
-		return
-	}
-	if group.Status != model.ChatGroupStatusNormal {
-		c.sendWSError("group is not available")
-		return
-	}
-
-	member, err := c.Hub.GroupRepo.FindMember(groupID, c.UserID)
-	if err != nil || member.Status != model.ChatGroupMemberStatusActive {
-		c.sendWSError("not a group member")
-		return
-	}
-
-	// 发送者用户名：跟 HTTP 路径一致写进事件，消费端广播后前端可直接展示
-	var username string
-	if user, err := c.Hub.GroupRepo.FindUserByID(c.UserID); err == nil && user != nil {
-		username = user.Username
-	}
-
-	message := &model.ChatGroupMessage{
-		GroupID:   groupID,
-		SenderUID: c.UserID,
-		Content:   content,
-	}
-	event := dto.GroupMessageCreatedEvent{
-		Type:      "group_message_created",
-		GroupID:   groupID,
-		FromUID:   c.UserID,
-		Username:  username,
-		Content:   content,
-		CreatedAt: time.Now(),
-	}
-	if err := c.Hub.GroupRepo.CreateGroupMessageWithOutboxBuilder(message, func(saved *model.ChatGroupMessage) (*model.MessageOutbox, error) {
-		event.MessageID = saved.ID
-		event.CreatedAt = saved.CreatedAt
-		return buildGroupMessageOutbox(event)
-	}); err != nil {
+	// 统一走 GroupService.SendGroupMessage：2000 字长/群状态/active 成员校验与 HTTP 一致，
+	// 落库 + outbox，消费端广播给在线成员（含发送者），这里不重复业务逻辑、也不额外直接推送。
+	grpSvc := c.Hub.GroupService
+	if grpSvc == nil {
 		c.sendWSError("send group message failed")
 		return
 	}
 
+	if _, err := grpSvc.SendGroupMessage(c.Hub.Ctx, c.UserID, groupID, content, ""); err != nil {
+		telemetry.Z().With(
+			"user_id", c.UserID,
+			"group_id", groupID,
+		).Errorf("ws send group message failed: %v", err)
+		c.sendWSErrorFromError(err, "send group message failed")
+		return
+	}
+
+	// 保持原 WS 行为：发送后刷新 active 成员缓存（HTTP 路径无此动作）
 	if c.Hub.GroupCache != nil {
 		_ = c.Hub.GroupCache.RefreshActiveMembers(c.Hub.Ctx, groupID)
 	}
@@ -363,4 +339,18 @@ func (c *WSClient) sendWSError(message string) {
 		Time:    time.Now().Format(time.RFC3339),
 	})
 	c.Hub.SendMessageToUser(c.UserID, errorMsg)
+}
+
+// sendWSErrorFromError 把 service 返回的 BizError 转成 WS 错误帧（保留现有 error 帧格式）。
+// 非业务错误（内部 500）用 fallback 文案，细节已在调用处带上下文字段入日志。
+func (c *WSClient) sendWSErrorFromError(err error, fallback string) {
+	if err == nil {
+		return
+	}
+	var bizErr *transport.BizError
+	if errors.As(err, &bizErr) && bizErr.Msg != "" {
+		c.sendWSError(bizErr.Msg)
+		return
+	}
+	c.sendWSError(fallback)
 }

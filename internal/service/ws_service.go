@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"go-admin/internal/dao"
-	"go-admin/pkg/core"
-
+	"di/internal/dao"
+	"di/internal/telemetry"
+	"di/internal/transport"
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/gorilla/websocket"
 )
@@ -29,7 +29,9 @@ func marshalWithPool(v interface{}) ([]byte, error) {
 	if err := enc.Encode(v); err != nil {
 		return nil, err
 	}
-	return buf.Bytes(), nil
+	// 返回前拷贝：buf.Bytes() 别名了 buffer 底层数组，defer 放回池后
+	// 并发 goroutine 会 Reset/Encode 覆写这块内存，导致异步写出时消息串包。
+	return append([]byte(nil), buf.Bytes()...), nil
 }
 
 // wsTokenRevoker WebSocket 握手时的 token 主动失效检查（与 HTTP 中间件共用实现）。
@@ -64,7 +66,7 @@ func (s *WSService) Shutdown(ctx context.Context) {
 
 func (s *WSService) AuthenticateToken(token string) (uint, error) {
 	if token == "" {
-		return 0, core.NewBizError(http.StatusUnauthorized, "missing token")
+		return 0, transport.NewBizError(http.StatusUnauthorized, "missing token")
 	}
 
 	claims := jwt.MapClaims{}
@@ -76,12 +78,12 @@ func (s *WSService) AuthenticateToken(token string) (uint, error) {
 		return s.jwtSecret, nil
 	})
 	if err != nil || !parsedToken.Valid {
-		return 0, core.NewBizError(http.StatusUnauthorized, "invalid token")
+		return 0, transport.NewBizError(http.StatusUnauthorized, "invalid token")
 	}
 
 	userIDFloat, ok := claims["user_id"].(float64)
 	if !ok || userIDFloat <= 0 {
-		return 0, core.NewBizError(http.StatusUnauthorized, "invalid token payload")
+		return 0, transport.NewBizError(http.StatusUnauthorized, "invalid token payload")
 	}
 	userID := uint(userIDFloat)
 
@@ -96,9 +98,9 @@ func (s *WSService) AuthenticateToken(token string) (uint, error) {
 		}
 		revoked, checkErr := s.revoker.IsRevoked(context.Background(), token, userID, issuedAt)
 		if checkErr != nil {
-			core.Z().Warnf("check ws token revocation failed: %v", checkErr)
+			telemetry.Z().Warnf("check ws token revocation failed: %v", checkErr)
 		} else if revoked {
-			return 0, core.NewBizError(http.StatusUnauthorized, "token revoked")
+			return 0, transport.NewBizError(http.StatusUnauthorized, "token revoked")
 		}
 	}
 
@@ -106,7 +108,11 @@ func (s *WSService) AuthenticateToken(token string) (uint, error) {
 }
 
 func (s *WSService) RegisterConnection(conn *websocket.Conn, userID uint) {
-	const pingTimeout = 60 * time.Second
+	const (
+		pingTimeout      = 60 * time.Second
+		maxWSMessageSize = 8 * 1024 // 8KB：群消息上限 2000 字 + JSON 开销，足够
+	)
+	conn.SetReadLimit(maxWSMessageSize) // 超大帧在 ReadMessage 处直接断开，内存不随帧增大
 	conn.SetReadDeadline(time.Now().Add(pingTimeout))
 	conn.SetPongHandler(func(string) error {
 		conn.SetReadDeadline(time.Now().Add(pingTimeout))
@@ -129,6 +135,7 @@ func (s *WSService) RegisterConnection(conn *websocket.Conn, userID uint) {
 func (s *WSService) SendToUser(userID uint, message interface{}) {
 	msgBytes, err := marshalWithPool(message)
 	if err != nil {
+		telemetry.Z().Errorf("marshal ws message failed user_id=%d: %v", userID, err)
 		return
 	}
 
@@ -168,6 +175,7 @@ func (s *WSService) KickUser(userID uint) {
 func (s *WSService) BroadcastMessage(message interface{}) {
 	msgBytes, err := marshalWithPool(message)
 	if err != nil {
+		telemetry.Z().Errorf("marshal ws broadcast message failed: %v", err)
 		return
 	}
 

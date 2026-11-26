@@ -4,18 +4,20 @@ package router
 import (
 	"net/http"
 
-	"go-admin/internal/container"
-	"go-admin/internal/middleware"
-	"go-admin/pkg/core"
-
+	"di/internal/container"
+	"di/internal/middleware"
+	"di/internal/transport"
 	"github.com/gin-gonic/gin"
 )
 
 // InitDependencyInjectionRouter wires middleware and handlers.
 func InitDependencyInjectionRouter(container *container.Container) *gin.Engine {
 	r := gin.New()
+	// 分布式限流后端：Redis 故障时中间件自动降级到本地单机限流
+	middleware.SetRateLimitRedis(container.Redis)
 	// 全局中间件：所有请求都会经过
 	r.Use(middleware.RequestID())
+	r.Use(middleware.RequestTimeout(container.Config.GetServerConfig().ReadTimeout))
 	r.Use(middleware.RequestLogger(container.Logger))
 	r.Use(middleware.CustomRecovery(container.Logger))
 	r.Use(middleware.Cors(container.Config.GetCORSOrigins()))
@@ -24,21 +26,21 @@ func InitDependencyInjectionRouter(container *container.Container) *gin.Engine {
 	public := r.Group("/")
 	{
 		// 健康检查（Docker healthcheck / 负载均衡探活）
-		public.GET("/healthz", func(c *gin.Context) { core.Success(c, gin.H{"status": "ok"}) })
+		public.GET("/healthz", func(c *gin.Context) { transport.Success(c, gin.H{"status": "ok"}) })
 		public.GET("/readyz", func(c *gin.Context) {
 			if err := container.DB.Exec("SELECT 1").Error; err != nil {
-				core.Fail(c, http.StatusServiceUnavailable, "mysql not ready")
+				transport.Fail(c, http.StatusServiceUnavailable, "mysql not ready")
 				return
 			}
 			if err := container.Redis.Ping(c.Request.Context()).Err(); err != nil {
-				core.Fail(c, http.StatusServiceUnavailable, "redis not ready")
+				transport.Fail(c, http.StatusServiceUnavailable, "redis not ready")
 				return
 			}
 			if container.Rabbit == nil || container.Rabbit.PublishChan() == nil || container.Rabbit.PublishChan().IsClosed() {
-				core.Fail(c, http.StatusServiceUnavailable, "rabbitmq not ready")
+				transport.Fail(c, http.StatusServiceUnavailable, "rabbitmq not ready")
 				return
 			}
-			core.Success(c, gin.H{"status": "ok"})
+			transport.Success(c, gin.H{"status": "ok"})
 		})
 
 		// 用户登录注册
@@ -111,6 +113,7 @@ func InitDependencyInjectionRouter(container *container.Container) *gin.Engine {
 			groupGroup.POST("/:id/leave", container.GroupHandler.LeaveGroup)
 			groupGroup.POST("/:id/messages", container.GroupHandler.SendGroupMessage)
 			groupGroup.GET("/:id/messages", container.GroupHandler.GetGroupMessages)
+			groupGroup.GET("/:id/messages/sync", container.GroupHandler.SyncGroupMessages)
 		}
 
 		// ---- 管理员接口（嵌套子路由，叠加管理员鉴权中间件） ----

@@ -236,6 +236,27 @@ func (s *PresenceService) IsOnline(ctx context.Context, userID uint) (bool, erro
 	return n > 0, nil
 }
 
+// IsOnlineBatch 批量查询在线状态：一次 pipeline 完成所有 EXISTS，替代逐个查询的串行 RTT。
+func (s *PresenceService) IsOnlineBatch(ctx context.Context, userIDs []uint) (map[uint]bool, error) {
+	result := make(map[uint]bool, len(userIDs))
+	if s == nil || s.client == nil || len(userIDs) == 0 {
+		return result, nil
+	}
+
+	pipe := s.client.Pipeline()
+	cmds := make([]*redis.IntCmd, 0, len(userIDs))
+	for _, id := range userIDs {
+		cmds = append(cmds, pipe.Exists(ctx, onlineKey(strconv.FormatUint(uint64(id), 10))))
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, err
+	}
+	for i, id := range userIDs {
+		result[id] = cmds[i].Val() > 0
+	}
+	return result, nil
+}
+
 // GetOnlineUserIDs 返回本实例的在线用户 ID。
 // 说明：presence 按实例维护集合（instance:{id}:users），跨实例汇总需在注册时维护全局索引，
 // 当前单实例部署下即为全量在线用户（多实例时由网关/路由层汇总，这里不做跨实例扫描）。

@@ -8,31 +8,32 @@ import (
 	"strings"
 	"time"
 
-	"go-admin/config"
-	"go-admin/pkg/core"
-
+	"di/internal/config"
+	"di/internal/infra"
+	"di/internal/telemetry"
 	"github.com/rabbitmq/amqp091-go"
 )
 
 // 查死信消息， 重新投递死信消息
 func main() {
 	var (
-		configPath = flag.String("config", "config/config.yaml", "config file path")
+		configPath = flag.String("config", "configs/config.yaml", "config file path")
 		queue      = flag.String("queue", "", "base queue name")
 		instanceID = flag.String("instance-id", "", "instance id")
 		dlqName    = flag.String("dlq", "", "full dlq name")
 		mode       = flag.String("mode", "list", "list or replay")
 		limit      = flag.Int("limit", 20, "max messages to process, 0 means all available")
+		showBody   = flag.Bool("show-body", false, "print message body (may contain sensitive data)")
 	)
 	flag.Parse()
 	//限制工具只能运行在 list（查看死信） 和 replay（重放死信）
 	if *mode != "list" && *mode != "replay" {
-		core.Z().Fatalf("invalid mode: %s", *mode)
+		telemetry.Z().Fatalf("invalid mode: %s", *mode)
 	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		core.Z().Fatalf("load config failed: %v", err)
+		telemetry.Z().Fatalf("load config failed: %v", err)
 	}
 	//确定业务队列名
 	fullQueue := strings.TrimSpace(*queue)
@@ -50,27 +51,27 @@ func main() {
 		fullDLQ = fmt.Sprintf("%s.%s.dlq", fullQueue, fullInstanceID)
 	}
 	//初始化并连接 RabbitMQ
-	rabbit, err := core.NewRabbitMQ(cfg.RabbitMQ.URL, cfg.RabbitMQ.Exchange, fmt.Sprintf("%s.%s", fullQueue, fullInstanceID))
+	rabbit, err := infra.NewRabbitMQ(cfg.RabbitMQ.URL, cfg.RabbitMQ.Exchange, fmt.Sprintf("%s.%s", fullQueue, fullInstanceID))
 	if err != nil {
-		core.Z().Fatalf("connect rabbitmq failed: %v", err)
+		telemetry.Z().Fatalf("connect rabbitmq failed: %v", err)
 	}
 	defer func() { _ = rabbit.Close() }()
 
 	ctx := context.Background()
 	switch *mode {
 	case "list":
-		if err := listDLQ(ctx, rabbit.ConsumeChan(), fullDLQ, *limit); err != nil {
-			core.Z().Fatalf("list dlq failed: %v", err)
+		if err := listDLQ(ctx, rabbit.ConsumeChan(), fullDLQ, *limit, *showBody); err != nil {
+			telemetry.Z().Fatalf("list dlq failed: %v", err)
 		}
 	case "replay":
 		if err := replayDLQ(ctx, rabbit.ConsumeChan(), rabbit.PublishChan(), cfg.RabbitMQ.Exchange, fullDLQ, *limit); err != nil {
-			core.Z().Fatalf("replay dlq failed: %v", err)
+			telemetry.Z().Fatalf("replay dlq failed: %v", err)
 		}
 	}
 }
 
 // 遍历并打印死信队列消息，仅查看、不删除原消息
-func listDLQ(ctx context.Context, ch *amqp091.Channel, dlq string, limit int) error {
+func listDLQ(ctx context.Context, ch *amqp091.Channel, dlq string, limit int, showBody bool) error {
 	count := 0
 	for {
 		if limit > 0 && count >= limit {
@@ -86,7 +87,7 @@ func listDLQ(ctx context.Context, ch *amqp091.Channel, dlq string, limit int) er
 			return nil
 		}
 
-		printDeliverySummary(count+1, msg)
+		printDeliverySummary(count+1, msg, showBody)
 		// Nack：拒绝签收，requeue=true → 消息重新放回原死信队列
 		_ = msg.Nack(false, true)
 		count++
@@ -114,12 +115,12 @@ func replayDLQ(ctx context.Context, consumeCh *amqp091.Channel, publishCh *amqp0
 		if err := publishCh.PublishWithContext(ctx, exchange, "", false, false, body); err != nil {
 			// 发布失败：Nack + 重新入队，消息留在死信队列，后续可再次重试
 			_ = msg.Nack(false, true)
-			core.Z().Errorf("publish message failed, continue next. err: %v", err)
+			telemetry.Z().Errorf("publish message failed, continue next. err: %v", err)
 			continue
 		}
 		// 发布成功：手动ACK，从死信队列彻底删除该消息
 		if err := msg.Ack(false); err != nil {
-			core.Z().Errorf("ack message failed, may cause duplicate msg. err: %v", err)
+			telemetry.Z().Errorf("ack message failed, may cause duplicate msg. err: %v", err)
 			return err
 		}
 		// 打印重放日志
@@ -129,20 +130,24 @@ func replayDLQ(ctx context.Context, consumeCh *amqp091.Channel, publishCh *amqp0
 	}
 }
 
-func printDeliverySummary(index int, msg amqp091.Delivery) {
-	body := strings.TrimSpace(string(msg.Body))
-	if len(body) > 512 {
-		body = body[:512] + "..."
-	}
-	fmt.Printf("[%d] message_id=%s request_id=%s type=%s group_id=%d redelivered=%t\n",
+func printDeliverySummary(index int, msg amqp091.Delivery, showBody bool) {
+	// 默认只输出元数据 + 长度，正文可能含群聊消息等敏感内容，需 -show-body 显式授权才打印
+	fmt.Printf("[%d] message_id=%s request_id=%s type=%s group_id=%d redelivered=%t body_len=%d\n",
 		index,
 		getHeaderString(msg.Headers, "message_id"),
 		getHeaderString(msg.Headers, "request_id"),
 		getHeaderString(msg.Headers, "type"),
 		getHeaderUint(msg.Headers, "group_id"),
 		msg.Redelivered,
+		len(msg.Body),
 	)
-	fmt.Printf("    body=%s\n", body)
+	if showBody {
+		body := strings.TrimSpace(string(msg.Body))
+		if len(body) > 512 {
+			body = body[:512] + "..."
+		}
+		fmt.Printf("    body=%s\n", body)
+	}
 }
 
 // 将从死信队列取出的 Delivery 消息，复制转换成可重新发布的 Publishing 结构

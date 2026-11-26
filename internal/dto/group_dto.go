@@ -29,3 +29,9 @@ type GroupMessageListQuery struct {
 	Page     int `form:"page" binding:"omitempty,min=1"`
 	PageSize int `form:"pageSize" binding:"omitempty,min=1"`
 }
+
+// GroupMessageSyncQuery 群消息断线补偿的增量同步参数：拉取 id 大于 AfterID 的消息
+type GroupMessageSyncQuery struct {
+	AfterID uint `form:"after_id" binding:"omitempty,min=1"`
+	Limit   int  `form:"limit" binding:"omitempty,min=1,max=100"`
+}

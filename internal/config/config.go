@@ -226,10 +226,37 @@ func (c *App) Validate() error {
 	if c.Mysql.Password == "" {
 		return fmt.Errorf("mysql.password is required (set via env APP_MYSQL_PASSWORD)")
 	}
-	if c.Jwt.Secret == "" || c.Jwt.Secret == "change-me" {
+	if isWeakPassword(c.Mysql.Password) {
+		return fmt.Errorf("mysql.password is a weak default value (set via env APP_MYSQL_PASSWORD)")
+	}
+	if c.Jwt.Secret == "" {
 		return fmt.Errorf("jwt.secret is required (set via env APP_JWT_SECRET)")
 	}
+	if isWeakJWTSecret(c.Jwt.Secret) {
+		return fmt.Errorf("jwt.secret is a placeholder value (set via env APP_JWT_SECRET)")
+	}
+	if len(c.Jwt.Secret) < 16 {
+		return fmt.Errorf("jwt.secret too short: at least 16 chars (set via env APP_JWT_SECRET)")
+	}
 	return nil
+}
+
+// isWeakPassword 识别常见弱口令，防止示例/开发默认值被直接用于生产。
+func isWeakPassword(pwd string) bool {
+	switch pwd {
+	case "123456", "password", "root", "admin", "12345678", "123456789", "change-me":
+		return true
+	}
+	return false
+}
+
+// isWeakJWTSecret 识别示例/占位密钥，防止示例配置被复制后仍用占位值。
+func isWeakJWTSecret(secret string) bool {
+	switch secret {
+	case "change-me", "docker-dev-secret-change-in-production", "your-secret-here", "secret":
+		return true
+	}
+	return false
 }
 
 // =============================================================================

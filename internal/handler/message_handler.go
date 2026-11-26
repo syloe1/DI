@@ -1,10 +1,11 @@
 package handler
 
 import (
-	"go-admin/internal/dto"
-	"go-admin/internal/service"
-	"go-admin/pkg/core"
+	"strconv"
 
+	"di/internal/dto"
+	"di/internal/service"
+	"di/internal/transport"
 	"github.com/gin-gonic/gin"
 )
 
@@ -17,64 +18,66 @@ func NewMessageHandler(svc *service.MessageService) *MessageHandler {
 }
 
 func (h *MessageHandler) GetConversations(c *gin.Context) {
-	data, err := h.svc.GetConversations(c.Request.Context(), c.GetUint("userID"))
+	cursor, _ := strconv.ParseUint(c.DefaultQuery("cursor", "0"), 10, 64)
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	items, nextCursor, err := h.svc.GetConversations(c.Request.Context(), c.GetUint("userID"), uint(cursor), limit)
 	if err != nil {
-		core.FailByError(c, err)
+		transport.FailByError(c, err)
 		return
 	}
-	core.Success(c, data)
+	transport.Success(c, gin.H{"items": items, "next_cursor": nextCursor})
 }
 
 func (h *MessageHandler) GetMessageList(c *gin.Context) {
 	var query dto.MessageListQuery
 	if err := c.ShouldBindQuery(&query); err != nil {
-		core.FailByError(c, core.ParseBindError(err))
+		transport.FailByError(c, transport.ParseBindError(err))
 		return
 	}
 
 	data, err := h.svc.GetMessageList(c.Request.Context(), c.GetUint("userID"), query.PeerID, query.Page, query.PageSize)
 	if err != nil {
-		core.FailByError(c, err)
+		transport.FailByError(c, err)
 		return
 	}
-	core.Success(c, data)
+	transport.Success(c, data)
 }
 
 // SyncMessages 断线重连后的增量同步：GET /auth/message/sync?after_id=&limit=
 func (h *MessageHandler) SyncMessages(c *gin.Context) {
 	var query dto.MessageSyncQuery
 	if err := c.ShouldBindQuery(&query); err != nil {
-		core.FailByError(c, core.ParseBindError(err))
+		transport.FailByError(c, transport.ParseBindError(err))
 		return
 	}
 
 	data, err := h.svc.SyncMessages(c.Request.Context(), c.GetUint("userID"), query.AfterID, query.Limit)
 	if err != nil {
-		core.FailByError(c, err)
+		transport.FailByError(c, err)
 		return
 	}
-	core.Success(c, data)
+	transport.Success(c, data)
 }
 
 func (h *MessageHandler) SendMessage(c *gin.Context) {
 	var req dto.SendMessageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		core.FailByError(c, core.ParseBindError(err))
+		transport.FailByError(c, transport.ParseBindError(err))
 		return
 	}
 
 	data, err := h.svc.SendMessage(c.Request.Context(), c.GetUint("userID"), req.ToUID, req.Content)
 	if err != nil {
-		core.FailByError(c, err)
+		transport.FailByError(c, err)
 		return
 	}
-	core.Success(c, data)
+	transport.Success(c, data)
 }
 
 func (h *MessageHandler) DeleteMessage(c *gin.Context) {
 	if err := h.svc.DeleteMessage(c.Request.Context(), c.GetUint("userID"), c.Param("id")); err != nil {
-		core.FailByError(c, err)
+		transport.FailByError(c, err)
 		return
 	}
-	core.SuccessWithMessage(c, "delete message success", nil)
+	transport.SuccessWithMessage(c, "delete message success", nil)
 }

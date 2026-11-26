@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
-	"go-admin/internal/dao"
-	"go-admin/internal/domain/model"
-	"go-admin/pkg/core"
+	"di/internal/dao"
+	"di/internal/domain/model"
+	"di/internal/dto"
+	"di/internal/telemetry"
 )
 
 // outbox后台扫描投递服务
@@ -51,48 +53,63 @@ func (s *OutboxService) Start(ctx context.Context) {
 
 func (s *OutboxService) publishDue(ctx context.Context) {
 	now := time.Now()
-	s.refreshMetrics()
-	items, err := s.repo.ClaimDue(s.batchSize, now,
+	s.refreshMetrics(ctx)
+	items, err := s.repo.ClaimDue(ctx, s.batchSize, now,
 		s.claimer, s.claimTTL)
 	if err != nil {
-		core.Z().Errorf("list outbox failed: %v", err)
+		telemetry.Z().Errorf("list outbox failed: %v", err)
 		return
 	}
 
 	for _, item := range items {
 		if err := s.publisher.PublishRaw(ctx, []byte(item.Payload)); err != nil {
+			s.logPublishError(item, "publish outbox message failed", err)
 			retryCount := item.RetryCount + 1
 			nextRetryAt := time.Now().Add(backoffDuration(retryCount))
-			if markErr := s.repo.MarkFailed(item.ID, retryCount, nextRetryAt, err.Error()); markErr != nil {
-				core.Z().Errorf("mark outbox failed (id=%d): %v", item.ID, markErr)
+			if markErr := s.repo.MarkFailed(ctx, item.ID, retryCount, nextRetryAt, err.Error()); markErr != nil {
+				s.logPublishError(item, "mark outbox failed", markErr)
 			}
-			core.Metrics.OutboxPublishFailed.Add(1)
+			telemetry.Metrics.OutboxPublishFailed.Add(1)
 			continue
 		}
 		//db标记为已投递，
-		if markErr := s.repo.MarkPublished(item.ID, time.Now()); markErr != nil {
-			core.Z().Errorf("mark outbox published (id=%d): %v", item.ID, markErr)
+		if markErr := s.repo.MarkPublished(ctx, item.ID, time.Now()); markErr != nil {
+			s.logPublishError(item, "mark outbox published", markErr)
 		}
-		core.Metrics.OutboxPublished.Add(1)
+		telemetry.Metrics.OutboxPublished.Add(1)
 	}
-	s.refreshMetrics()
+	s.refreshMetrics(ctx)
 }
 
-func (s *OutboxService) refreshMetrics() {
-	pending, err := s.repo.CountByStatus(model.MessageOutboxStatusPending)
+func (s *OutboxService) refreshMetrics(ctx context.Context) {
+	pending, err := s.repo.CountByStatus(ctx, model.MessageOutboxStatusPending)
 	if err == nil {
-		core.Metrics.OutboxPending.Store(pending)
+		telemetry.Metrics.OutboxPending.Store(pending)
 	}
 
-	processing, err := s.repo.CountByStatus(model.MessageOutboxStatusProcessing)
+	processing, err := s.repo.CountByStatus(ctx, model.MessageOutboxStatusProcessing)
 	if err == nil {
-		core.Metrics.OutboxProcessing.Store(processing)
+		telemetry.Metrics.OutboxProcessing.Store(processing)
 	}
 
-	failed, err := s.repo.CountByStatus(model.MessageOutboxStatusFailed)
+	failed, err := s.repo.CountByStatus(ctx, model.MessageOutboxStatusFailed)
 	if err == nil {
-		core.Metrics.OutboxFailed.Store(failed)
+		telemetry.Metrics.OutboxFailed.Store(failed)
 	}
+}
+
+// logPublishError 发布/标记出错日志带关键字段（从 outbox payload 反解事件）。
+// message_id/group_id/user_id/request_id 缺失时为对应零值/空，便于线上定位到具体群消息。
+func (s *OutboxService) logPublishError(item model.MessageOutbox, msg string, err error) {
+	var event dto.GroupMessageCreatedEvent
+	_ = json.Unmarshal([]byte(item.Payload), &event)
+	telemetry.Z().With(
+		"outbox_id", item.ID,
+		"message_id", event.MessageID,
+		"group_id", event.GroupID,
+		"user_id", event.FromUID,
+		"request_id", event.RequestID,
+	).Errorf("%s: %v", msg, err)
 }
 
 // 规避重试风暴 指数时间上升

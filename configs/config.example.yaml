@@ -46,7 +46,7 @@ auth:
 # 演示账号：开启后登录页显示「体验 Demo」按钮（需先执行 cmd/seed 写入种子数据）。
 # 公网正式环境如果不想暴露演示入口，设为 false 或删除前端入口。
 demo:
-  enabled: true               # ← APP_DEMO_ENABLED
+  enabled: false              # ← APP_DEMO_ENABLED（公网正式环境不要开启演示入口）
   username: "demo"            # ← APP_DEMO_USERNAME
 
 rabbitmq:

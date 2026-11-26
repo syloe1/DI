@@ -5,7 +5,7 @@ import (
 	"math/rand"
 	"time"
 
-	"go-admin/internal/dao"
+	"di/internal/dao"
 )
 
 // 缓存支持
