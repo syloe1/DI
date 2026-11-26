@@ -40,3 +40,8 @@ r.md
 # Local built binaries (no extension leftovers)
 /di-server
 /server
+
+# 个人笔记：只留本地，不入库
+/面试.md
+/intro.md
+/interview_qa.md
